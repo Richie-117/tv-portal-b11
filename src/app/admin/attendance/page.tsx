@@ -27,6 +27,7 @@ import {
   User,
   Shield,
   Info,
+  Trash2,
 } from 'lucide-react';
 import { CheckinSession, CourseScope, AttendanceStatus } from '@/types';
 import { calculateStudentAttendanceMetrics } from '@/lib/attendanceCalculations';
@@ -193,6 +194,32 @@ export default function AdminAttendancePage() {
     await fetchAllData();
     if (activeEditorSession?.id === sessionId) {
       setActiveEditorSession((prev) => (prev ? { ...prev, checkinStatus: 'closed' } : null));
+    }
+  };
+
+  const handleDeleteSession = async (sessionId: string, title?: string) => {
+    if (
+      !confirm(
+        `Delete attendance record for "${title || 'this session'}"?\n\nThis will permanently remove this session card and any student roll-call records marked for it.`
+      )
+    )
+      return;
+
+    try {
+      const res = await fetch(`/api/admin/broadcast?sessionId=${sessionId}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (activeEditorSession?.id === sessionId) {
+          setActiveEditorSession(null);
+        }
+        await fetchAllData();
+      } else {
+        alert(data.error || 'Failed to delete broadcast record');
+      }
+    } catch {
+      alert('Failed to delete broadcast record');
     }
   };
 
@@ -500,6 +527,14 @@ export default function AdminAttendancePage() {
                             <span>Edit Attendance</span>
                             <ChevronRight className="w-3.5 h-3.5" />
                           </button>
+
+                          <button
+                            onClick={() => handleDeleteSession(sess.id, sess.moduleTitle)}
+                            className="p-2.5 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 hover:border-rose-200 transition-colors cursor-pointer"
+                            title="Delete this record card"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -559,6 +594,15 @@ export default function AdminAttendancePage() {
                           <span>Finalize Attendance ({pendingCount})</span>
                         </button>
                       )}
+
+                      <button
+                        onClick={() => handleDeleteSession(activeEditorSession.id, activeEditorSession.moduleTitle)}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-mono text-xs font-bold border border-rose-200 transition-all active:scale-95 cursor-pointer"
+                        title="Delete this session record card"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete Record</span>
+                      </button>
                     </div>
                   </div>
 

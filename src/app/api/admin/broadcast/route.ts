@@ -4,6 +4,7 @@ import {
   getCheckinSessions,
   updateCheckinSessionStatus,
   getCheckinSessionById,
+  deleteCheckinSession,
 } from '@/lib/db';
 import { CheckinSession } from '@/types';
 
@@ -73,6 +74,22 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ success: true, message: `Session updated to ${status || 'closed'}` });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || 'Failed to update session' }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const sessionId = searchParams.get('sessionId') || searchParams.get('id');
+
+    if (!sessionId) {
+      return NextResponse.json({ error: 'Session ID is required' }, { status: 400 });
+    }
+
+    await deleteCheckinSession(sessionId);
+    return NextResponse.json({ success: true, message: 'Broadcast session deleted successfully' });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || 'Failed to delete session' }, { status: 500 });
   }
 }
 

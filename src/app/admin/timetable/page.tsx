@@ -20,7 +20,15 @@ import {
 } from 'lucide-react';
 import { DayOfWeek, CourseScope, TimetableSlot, TimetableOverride, AcademicModule } from '@/types';
 
-const DAYS: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const DAYS: { full: DayOfWeek; short: string }[] = [
+  { full: 'Monday', short: 'Mon' },
+  { full: 'Tuesday', short: 'Tue' },
+  { full: 'Wednesday', short: 'Wed' },
+  { full: 'Thursday', short: 'Thu' },
+  { full: 'Friday', short: 'Fri' },
+  { full: 'Saturday', short: 'Sat' },
+  { full: 'Sunday', short: 'Sun' },
+];
 
 export default function AdminTimetablePage() {
   const [selectedCourse, setSelectedCourse] = useState<CourseScope>('TPOPT');
@@ -282,19 +290,22 @@ export default function AdminTimetablePage() {
             </button>
           </div>
 
-          {/* Weekday Pills */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-2 scrollbar-none">
-            {DAYS.map((d) => (
+          {/* Weekday Selector - 7-column responsive grid with shortened names for mobile */}
+          <div className="grid grid-cols-7 gap-1 sm:gap-2">
+            {DAYS.map(({ full, short }) => (
               <button
-                key={d}
-                onClick={() => setSelectedDay(d)}
-                className={`px-3.5 py-1.5 rounded-xl font-mono text-xs font-bold transition-all ${
-                  selectedDay === d
+                key={full}
+                type="button"
+                onClick={() => setSelectedDay(full)}
+                className={`py-2 px-1 rounded-xl font-mono text-xs font-bold text-center transition-all ${
+                  selectedDay === full
                     ? 'bg-slate-900 text-white shadow-sm'
                     : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
                 }`}
+                title={full}
               >
-                {d}
+                <span className="sm:hidden">{short}</span>
+                <span className="hidden sm:inline">{full}</span>
               </button>
             ))}
           </div>

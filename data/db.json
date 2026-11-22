@@ -2365,6 +2365,25 @@
   "lectureOverrides": [],
   "checkinSessions": [
     {
+      "id": "sess-1795371148347",
+      "course": "ALL",
+      "moduleId": "sub-english",
+      "moduleCode": "ENGLISH",
+      "moduleTitle": "English",
+      "sessionType": "lecture",
+      "date": "2026-11-22",
+      "startTime": "08:30",
+      "endTime": "16:30",
+      "checkinStatus": "active",
+      "sessionStatus": "active",
+      "checkinWindowMinutes": 60,
+      "checkinOpenedAt": "2026-11-22T18:12:28.347Z",
+      "checkinExpiresAt": "2026-11-22T19:12:28.347Z",
+      "notes": "",
+      "createdBy": "Administrator",
+      "createdAt": "2026-11-22T18:12:28.347Z"
+    },
+    {
       "id": "sess-1795366571618",
       "course": "TPOPT",
       "moduleId": "sub-ict",
@@ -2396,6 +2415,17 @@
       "status": "present",
       "submissionSource": "self_checkin",
       "markedAt": "2026-11-22T16:56:11.636Z"
+    },
+    {
+      "id": "rec-1795371162682-6mrz1",
+      "sessionId": "sess-1795371148347",
+      "studentId": "student-tpopt-005",
+      "studentNumber": "RT/TPOPT/26/02",
+      "studentName": "P.A. Hesan Samudika",
+      "course": "TPOPT",
+      "status": "present",
+      "submissionSource": "self_checkin",
+      "markedAt": "2026-11-22T18:12:42.682Z"
     }
   ],
   "attendanceCheckins": [
@@ -2409,21 +2439,20 @@
       "status": "confirmed",
       "timestamp": "2026-11-22T16:56:11.636Z",
       "deviceFingerprint": "mobile-browser"
-    }
-  ],
-  "invitations": [
+    },
     {
-      "id": "inv-1795367804023",
+      "id": "chk-1795371162682-l4xn5",
+      "sessionId": "sess-1795371148347",
       "studentId": "student-tpopt-005",
       "studentNumber": "RT/TPOPT/26/02",
+      "studentName": "P.A. Hesan Samudika",
       "course": "TPOPT",
-      "tokenHash": "44bdeb93d38da7fc7fb7764a8447fddd06287a2ed94e8da35ec4c80a13784f19",
-      "tokenClear": "B11-70A3-1D3E",
-      "isRedeemed": false,
-      "expiresAt": "2026-12-06T17:16:44.023Z",
-      "createdAt": "2026-11-22T17:16:44.023Z"
+      "status": "confirmed",
+      "timestamp": "2026-11-22T18:12:42.682Z",
+      "deviceFingerprint": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36"
     }
   ],
+  "invitations": [],
   "users": [
     {
       "id": "admin-001",

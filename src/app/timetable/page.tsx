@@ -15,7 +15,15 @@ import {
 } from 'lucide-react';
 import { CourseScope, DayOfWeek, TimetableSlot, TimetableOverride } from '@/types';
 
-const DAYS: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const DAYS: { full: DayOfWeek; short: string }[] = [
+  { full: 'Monday', short: 'Mon' },
+  { full: 'Tuesday', short: 'Tue' },
+  { full: 'Wednesday', short: 'Wed' },
+  { full: 'Thursday', short: 'Thu' },
+  { full: 'Friday', short: 'Fri' },
+  { full: 'Saturday', short: 'Sat' },
+  { full: 'Sunday', short: 'Sun' },
+];
 
 export default function TimetablePage() {
   const [selectedCourse, setSelectedCourse] = useState<'TPOPT' | 'TPRPT'>('TPOPT');
@@ -145,25 +153,32 @@ export default function TimetablePage() {
           </button>
         </div>
 
-        {/* Weekday Selector Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-2 scrollbar-none">
-          {DAYS.map((day) => {
-            const isSelected = selectedDay === day;
-            const isToday = todayDayOfWeek.toLowerCase() === day.toLowerCase();
+        {/* Weekday Selector - 7-column responsive grid with shortened names for mobile */}
+        <div className="grid grid-cols-7 gap-1 sm:gap-2">
+          {DAYS.map(({ full, short }) => {
+            const isSelected = selectedDay === full;
+            const isToday = todayDayOfWeek.toLowerCase() === full.toLowerCase();
             return (
               <button
-                key={day}
-                onClick={() => setSelectedDay(day)}
-                className={`px-4 py-2 rounded-xl text-xs font-mono font-bold whitespace-nowrap transition-all touch-target ${
+                key={full}
+                type="button"
+                onClick={() => setSelectedDay(full)}
+                className={`py-2 px-1 rounded-xl text-xs font-mono font-bold text-center transition-all relative ${
                   isSelected
                     ? 'bg-slate-900 text-white shadow-sm'
                     : isToday
                     ? 'bg-blue-50 text-[#0088FF] border border-blue-200'
                     : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
                 }`}
+                title={`${full}${isToday ? ' (Today)' : ''}`}
               >
-                <span>{day}</span>
-                {isToday && <span className="ml-1.5 text-[9px] uppercase px-1 py-0.2 rounded bg-[#0088FF] text-white">TODAY</span>}
+                <span className="sm:hidden">{short}</span>
+                <span className="hidden sm:inline">{full}</span>
+                {isToday && (
+                  <span className={`block text-[8px] uppercase tracking-tighter ${isSelected ? 'text-blue-200' : 'text-[#0088FF]'}`}>
+                    NOW
+                  </span>
+                )}
               </button>
             );
           })}

@@ -429,6 +429,23 @@ export async function updateCheckinSessionStatus(
   return true;
 }
 
+export async function deleteCheckinSession(id: string): Promise<boolean> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      await supabase.from('attendance_checkins').delete().eq('session_id', id);
+      await supabase.from('attendance_records').delete().eq('session_id', id);
+      await supabase.from('checkin_sessions').delete().eq('id', id);
+    } catch {}
+  }
+  await saveLocalDatabase((db) => {
+    db.checkinSessions = (db.checkinSessions || []).filter((s) => s.id !== id);
+    db.attendanceRecords = (db.attendanceRecords || []).filter((r) => r.sessionId !== id);
+    db.attendanceCheckins = (db.attendanceCheckins || []).filter((c) => c.sessionId !== id);
+  });
+  return true;
+}
+
 // =============================================================================
 // Attendance Submissions & Records
 // =============================================================================
