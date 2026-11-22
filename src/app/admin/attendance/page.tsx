@@ -200,14 +200,35 @@ export default function AdminAttendancePage() {
 
   const handleCloseSessionEarly = async (sessionId: string) => {
     if (!confirm('Close this check-in window early? Students will no longer be able to self-check in.')) return;
-    await fetch('/api/admin/broadcast', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, status: 'closed' }),
-    });
-    await fetchAllData();
-    if (activeEditorSession?.id === sessionId) {
-      setActiveEditorSession((prev) => (prev ? { ...prev, checkinStatus: 'closed' } : null));
+    try {
+      await fetch('/api/admin/broadcast', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, status: 'closed' }),
+      });
+      await fetchAllData();
+      if (activeEditorSession?.id === sessionId) {
+        setActiveEditorSession((prev) => (prev ? { ...prev, checkinStatus: 'closed' } : null));
+      }
+    } catch {
+      alert('Failed to close check-in window');
+    }
+  };
+
+  const handleReopenSession = async (sessionId: string) => {
+    if (!confirm('Reopen this check-in window? Students will be able to submit check-in again.')) return;
+    try {
+      await fetch('/api/admin/broadcast', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, status: 'active' }),
+      });
+      await fetchAllData();
+      if (activeEditorSession?.id === sessionId) {
+        setActiveEditorSession((prev) => (prev ? { ...prev, checkinStatus: 'active' } : null));
+      }
+    } catch {
+      alert('Failed to reopen check-in window');
     }
   };
 
@@ -237,7 +258,7 @@ export default function AdminAttendancePage() {
     }
   };
 
-  const handleSaveRoster = async () => {
+  const handleSaveRoster = async (closeWindowAfterSave = false) => {
     if (!activeEditorSession) return;
     setIsSaving(true);
     setSaveFeedback(null);
@@ -259,14 +280,26 @@ export default function AdminAttendancePage() {
           });
         }
       }
-      setSaveFeedback('Session attendance successfully saved to database!');
+
+      if (closeWindowAfterSave) {
+        await fetch('/api/admin/broadcast', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: activeEditorSession.id, status: 'closed' }),
+        });
+        setActiveEditorSession((prev) => (prev ? { ...prev, checkinStatus: 'closed' } : null));
+        setSaveFeedback('Session saved & check-in window successfully closed!');
+      } else {
+        setSaveFeedback('Session attendance successfully saved to database!');
+      }
+
       await openSessionEditor(activeEditorSession);
       await fetchAllData();
     } catch {
       setSaveFeedback('Error saving updates');
     } finally {
       setIsSaving(false);
-      setTimeout(() => setSaveFeedback(null), 3000);
+      setTimeout(() => setSaveFeedback(null), 3500);
     }
   };
 
@@ -688,14 +721,23 @@ export default function AdminAttendancePage() {
 
                           {/* Action Buttons */}
                           <div className="flex items-center gap-2 flex-shrink-0 self-end md:self-center">
-                            {sess.checkinStatus === 'active' && (
+                            {sess.checkinStatus === 'active' ? (
                               <button
                                 onClick={() => handleCloseSessionEarly(sess.id)}
                                 className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-mono text-xs font-bold transition-all active:scale-95 cursor-pointer"
+                                title="Close check-in window so students cannot self-check in"
                               >
                                 Close Window
                               </button>
-                            )}
+                            ) : sess.checkinStatus === 'closed' ? (
+                              <button
+                                onClick={() => handleReopenSession(sess.id)}
+                                className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-mono text-xs font-bold transition-all active:scale-95 cursor-pointer"
+                                title="Reopen check-in window"
+                              >
+                                Reopen
+                              </button>
+                            ) : null}
 
                             <button
                               onClick={() => openSessionEditor(sess)}
@@ -745,6 +787,27 @@ export default function AdminAttendancePage() {
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap">
+                      {/* Close or Reopen Window Button */}
+                      {activeEditorSession.checkinStatus === 'active' ? (
+                        <button
+                          onClick={() => handleCloseSessionEarly(activeEditorSession.id)}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-mono text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-sm"
+                          title="Close check-in window so students cannot self-check in"
+                        >
+                          <Clock className="w-3.5 h-3.5 text-amber-600" />
+                          <span>Close Window</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleReopenSession(activeEditorSession.id)}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-mono text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-sm"
+                          title="Reopen check-in window for late student arrivals"
+                        >
+                          <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+                          <span>Reopen Window</span>
+                        </button>
+                      )}
+
                       <a
                         href={`/api/admin/export/pdf?sessionId=${activeEditorSession.id}`}
                         download
@@ -798,19 +861,31 @@ export default function AdminAttendancePage() {
                       />
                     </div>
 
-                    <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                    <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end flex-wrap">
                       {saveFeedback && (
-                        <span className="text-xs font-mono font-bold text-emerald-600 animate-fade-in">
+                        <span className="text-xs font-mono font-bold text-emerald-600 animate-fade-in mr-1">
                           {saveFeedback}
                         </span>
                       )}
+
                       <button
-                        onClick={handleSaveRoster}
+                        onClick={() => handleSaveRoster(false)}
                         disabled={isSaving}
-                        className="px-5 py-2.5 rounded-xl bg-[#0088FF] hover:bg-[#0055CC] text-white font-heading font-black text-xs uppercase tracking-wider shadow-md shadow-[#0088FF]/30 transition-all flex items-center gap-2 active:scale-95 cursor-pointer touch-target"
+                        className="px-4 py-2.5 rounded-xl bg-[#0088FF] hover:bg-[#0055CC] text-white font-heading font-black text-xs uppercase tracking-wider shadow-md shadow-[#0088FF]/30 transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer touch-target"
+                        title="Save session attendance updates to database"
                       >
                         <Save className="w-3.5 h-3.5" />
-                        <span>{isSaving ? 'Saving Updates...' : 'Save Updated Session'}</span>
+                        <span>{isSaving ? 'Saving...' : 'Save Updates'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleSaveRoster(true)}
+                        disabled={isSaving}
+                        className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-heading font-black text-xs uppercase tracking-wider shadow-md shadow-slate-900/25 transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer touch-target"
+                        title="Save attendance and immediately close the check-in window"
+                      >
+                        <Clock className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Save &amp; Close Window</span>
                       </button>
                     </div>
                   </div>

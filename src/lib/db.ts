@@ -366,7 +366,16 @@ export async function getCheckinSessions(): Promise<CheckinSession[]> {
     } catch {}
   }
   const db = await getLocalDatabase();
-  return db.checkinSessions || [];
+  const rawSessions: CheckinSession[] = db.checkinSessions || [];
+  const seen = new Set<string>();
+  const uniqueSessions: CheckinSession[] = [];
+  for (const s of rawSessions) {
+    if (!seen.has(s.id)) {
+      seen.add(s.id);
+      uniqueSessions.push(s);
+    }
+  }
+  return uniqueSessions;
 }
 
 export async function getCheckinSessionById(id: string): Promise<CheckinSession | null> {
@@ -400,7 +409,19 @@ export async function createCheckinSession(session: CheckinSession): Promise<Che
     } catch {}
   }
   await saveLocalDatabase((db) => {
-    db.checkinSessions.unshift(session);
+    const existingIdx = (db.checkinSessions || []).findIndex(
+      (s) =>
+        s.id === session.id ||
+        (s.date === session.date &&
+          s.course === session.course &&
+          s.moduleId === session.moduleId &&
+          s.startTime === session.startTime)
+    );
+    if (existingIdx >= 0) {
+      db.checkinSessions[existingIdx] = session;
+    } else {
+      db.checkinSessions.unshift(session);
+    }
   });
   return session;
 }

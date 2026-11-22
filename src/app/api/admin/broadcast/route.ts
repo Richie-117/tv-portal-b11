@@ -32,6 +32,27 @@ export async function POST(req: NextRequest) {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + windowMin * 60 * 1000);
 
+    // Duplicate Check: Prevent creating duplicate broadcast cards for same module, date, and cohort
+    const allSessions = await getCheckinSessions();
+    const isDuplicate = allSessions.some(
+      (s) =>
+        s.date === date &&
+        s.course === (course || 'ALL') &&
+        (s.moduleId === moduleId ||
+          s.moduleCode === (moduleCode || 'LEC') ||
+          s.moduleTitle.toLowerCase() === moduleTitle.toLowerCase()) &&
+        s.startTime === startTime
+    );
+
+    if (isDuplicate) {
+      return NextResponse.json(
+        {
+          error: `Duplicate Broadcast Prevented: A session record for "${moduleTitle}" (${course || 'ALL'}) on ${date} at ${startTime} already exists. Please edit or delete the existing card instead.`,
+        },
+        { status: 409 }
+      );
+    }
+
     const sessionId = `sess-${Date.now()}`;
     const newSession: CheckinSession = {
       id: sessionId,
