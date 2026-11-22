@@ -67,6 +67,8 @@ export default function TimetablePage() {
 
   useEffect(() => {
     fetchTimetableData();
+    const interval = setInterval(fetchTimetableData, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   // Filter slots for selected course and day
@@ -212,33 +214,66 @@ export default function TimetablePage() {
                   (o.slotId === slot.id || (slot.subject && o.subject.toLowerCase() === slot.subject.toLowerCase()))
               );
 
+              const isCancelled = slotOverride?.action === 'cancel';
+              const isPostponed = slotOverride?.action === 'postpone';
+              const isLunch = slot.slotType === 'lunch';
+              const isBreak = slot.slotType === 'break';
+              const isClass = slot.slotType === 'class' || (!isLunch && !isBreak);
+
+              // Responsive color styling synced to live lecture status
+              let cardContainerClass = 'border-slate-200 hover:border-slate-300 bg-white';
+              let iconBoxClass = 'bg-blue-50 text-[#0088FF] border border-blue-200';
+              let subjectColorClass = 'text-slate-900';
+
+              if (isCancelled) {
+                cardContainerClass = 'bg-rose-50/70 border-rose-300 text-rose-900';
+                iconBoxClass = 'bg-rose-100 text-rose-700 border border-rose-200';
+                subjectColorClass = 'line-through text-rose-600';
+              } else if (isPostponed) {
+                cardContainerClass = 'bg-amber-50/70 border-amber-300 text-amber-900';
+                iconBoxClass = 'bg-amber-100 text-amber-800 border border-amber-200';
+                subjectColorClass = 'text-amber-900';
+              } else if (isOngoing && isClass) {
+                // Ongoing class lecture -> TURN TO GREEN COLOR!
+                cardContainerClass =
+                  'bg-gradient-to-r from-emerald-50 via-emerald-50/50 to-white border-2 border-emerald-500 ring-2 ring-emerald-500/25 shadow-md shadow-emerald-500/15';
+                iconBoxClass = 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30';
+                subjectColorClass = 'text-emerald-950 font-black';
+              } else if (isOngoing && isLunch) {
+                // Ongoing lunch -> TURN TO VIBRANT YELLOW / AMBER!
+                cardContainerClass =
+                  'bg-gradient-to-r from-amber-50 via-yellow-50/70 to-white border-2 border-amber-400 ring-2 ring-amber-400/25 shadow-md shadow-amber-400/15';
+                iconBoxClass = 'bg-amber-400 text-amber-950 shadow-md shadow-amber-400/20';
+                subjectColorClass = 'text-amber-950 font-black';
+              } else if (isOngoing && isBreak) {
+                cardContainerClass =
+                  'bg-amber-50/60 border-2 border-amber-300 ring-1 ring-amber-300/30';
+                iconBoxClass = 'bg-amber-200 text-amber-900';
+                subjectColorClass = 'text-amber-950 font-bold';
+              } else if (isLunch) {
+                // Static lunch -> Distinct warm YELLOW / AMBER styling!
+                cardContainerClass = 'bg-amber-50/40 border border-amber-200 hover:border-amber-300';
+                iconBoxClass = 'bg-amber-100 text-amber-800 border border-amber-200';
+                subjectColorClass = 'text-amber-950 font-bold';
+              } else if (isBreak) {
+                cardContainerClass = 'border-slate-200/70 bg-slate-50/60 hover:border-slate-300';
+                iconBoxClass = 'bg-slate-100 text-slate-600 border border-slate-200';
+                subjectColorClass = 'text-slate-700 font-bold';
+              }
+
               return (
                 <div
                   key={slot.id}
-                  className={`bg-white border rounded-2xl p-4 transition-all relative overflow-hidden ${
-                    isOngoing
-                      ? 'border-[#0088FF] shadow-md ring-2 ring-[#0088FF]/20'
-                      : slot.slotType === 'break' || slot.slotType === 'lunch'
-                      ? 'border-slate-200/60 bg-slate-50/50'
-                      : 'border-slate-200 hover:border-slate-300'
-                  }`}
+                  className={`rounded-2xl p-4 transition-all relative overflow-hidden ${cardContainerClass}`}
                 >
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     
                     {/* Time & Type Indicator */}
                     <div className="flex items-center gap-3">
-                      <div className={`p-2.5 rounded-xl font-mono text-xs font-black ${
-                        isOngoing
-                          ? 'bg-[#0088FF] text-white animate-pulse'
-                          : slot.slotType === 'lunch'
-                          ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                          : slot.slotType === 'break'
-                          ? 'bg-slate-100 text-slate-600'
-                          : 'bg-blue-50 text-[#0088FF] border border-blue-200'
-                      }`}>
-                        {slot.slotType === 'lunch' ? (
+                      <div className={`p-2.5 rounded-xl font-mono text-xs font-black ${iconBoxClass}`}>
+                        {isLunch ? (
                           <Utensils className="w-4 h-4" />
-                        ) : slot.slotType === 'break' ? (
+                        ) : isBreak ? (
                           <Coffee className="w-4 h-4" />
                         ) : (
                           <BookOpen className="w-4 h-4" />
@@ -246,17 +281,42 @@ export default function TimetablePage() {
                       </div>
 
                       <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-xs font-bold text-slate-900">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`font-mono text-xs font-bold ${isOngoing && isClass ? 'text-emerald-950 font-black' : isOngoing && isLunch ? 'text-amber-950 font-black' : 'text-slate-900'}`}>
                             {slot.startTime} – {slot.endTime}
                           </span>
-                          {isOngoing && (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-black uppercase bg-emerald-500 text-white animate-pulse">
-                              LIVE NOW
+
+                          {/* Live Status Indicators */}
+                          {isOngoing && isClass && !isCancelled && !isPostponed && (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-black uppercase bg-emerald-600 text-white animate-pulse flex items-center gap-1.5 shadow-xs">
+                              <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                              LIVE LECTURE NOW
+                            </span>
+                          )}
+                          {isOngoing && isLunch && (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-black uppercase bg-amber-400 text-amber-950 animate-pulse flex items-center gap-1.5 shadow-xs">
+                              <Utensils className="w-3 h-3" />
+                              LUNCH BREAK NOW
+                            </span>
+                          )}
+                          {isOngoing && isBreak && (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-black uppercase bg-amber-200 text-amber-900 animate-pulse">
+                              INTERVAL BREAK
+                            </span>
+                          )}
+                          {isCancelled && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">
+                              CANCELLED TODAY
+                            </span>
+                          )}
+                          {isPostponed && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-black uppercase bg-amber-100 text-amber-800 border border-amber-200">
+                              POSTPONED
                             </span>
                           )}
                         </div>
-                        <div className="text-[11px] font-semibold text-slate-500">
+
+                        <div className="text-[11px] font-semibold text-slate-500 mt-0.5">
                           {slot.course === 'ALL' ? 'Common Module (TPOPT & TPRPT)' : `${slot.course} Exclusive`}
                         </div>
                       </div>
@@ -264,21 +324,29 @@ export default function TimetablePage() {
 
                     {/* Subject Details */}
                     <div className="text-left sm:text-right">
-                      {slot.slotType === 'break' || slot.slotType === 'lunch' ? (
+                      {isLunch ? (
+                        <div>
+                          <div className="font-heading font-black text-base text-amber-950 flex sm:justify-end items-center gap-2">
+                            <span>Lunch Break</span>
+                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-200">
+                              Recess & Meals
+                            </span>
+                          </div>
+                          <div className="text-[11px] font-mono text-amber-800/80">
+                            Mid-day break for TV Studies Batch 11
+                          </div>
+                        </div>
+                      ) : isBreak ? (
                         <div className="font-heading font-bold text-sm text-slate-600">
-                          {slot.subject || (slot.slotType === 'lunch' ? 'Lunch Break' : 'Interval')}
+                          {slot.subject || 'Break Interval'}
                         </div>
                       ) : (
                         <div>
-                          <div className={`font-heading font-black text-base ${
-                            slotOverride?.action === 'cancel'
-                              ? 'line-through text-rose-500'
-                              : 'text-slate-900'
-                          }`}>
+                          <div className={`font-heading font-black text-base ${subjectColorClass}`}>
                             {slot.subject || 'Practical / Study Period'}
                           </div>
                           {slot.studentGroup && (
-                            <div className="text-[11px] font-mono text-slate-500">
+                            <div className={`text-[11px] font-mono ${isOngoing && isClass ? 'text-emerald-700 font-bold' : 'text-slate-500'}`}>
                               Target: {slot.studentGroup}
                             </div>
                           )}

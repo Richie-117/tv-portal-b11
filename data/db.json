@@ -2362,7 +2362,28 @@
       "sortOrder": 70
     }
   ],
-  "lectureOverrides": [],
+  "lectureOverrides": [
+    {
+      "id": "ovr-1795375760321",
+      "course": "ALL",
+      "date": "2026-11-23",
+      "action": "postpone",
+      "subject": "Lectures Postponed",
+      "reason": "",
+      "updatedBy": "Television Studies Administrator",
+      "createdAt": "2026-11-22T19:29:20.321Z"
+    },
+    {
+      "id": "ovr-1795375771394",
+      "course": "ALL",
+      "date": "2026-11-24",
+      "action": "holiday",
+      "subject": "Public / Academic Holiday",
+      "reason": "",
+      "updatedBy": "Television Studies Administrator",
+      "createdAt": "2026-11-22T19:29:31.394Z"
+    }
+  ],
   "checkinSessions": [
     {
       "id": "sess-1795371148347",

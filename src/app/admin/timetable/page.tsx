@@ -65,20 +65,38 @@ export default function AdminTimetablePage() {
   const [overrideReason, setOverrideReason] = useState('');
   const [isSubmittingOverride, setIsSubmittingOverride] = useState(false);
 
+  // Live Time Context
+  const [currentTimeStr, setCurrentTimeStr] = useState<string>('');
+  const [currentMinutesNow, setCurrentMinutesNow] = useState<number>(0);
+  const [todayDayOfWeek, setTodayDayOfWeek] = useState<string>('');
+
+  const parseTimeToMinutes = (t: string) => {
+    if (!t) return 0;
+    const [h, m] = t.split(':').map(Number);
+    return (h || 0) * 60 + (m || 0);
+  };
+
   const fetchTimetableData = async () => {
     try {
-      const [entriesRes, modRes, overRes] = await Promise.all([
+      const [entriesRes, modRes, overRes, liveRes] = await Promise.all([
         fetch('/api/timetable/entries'),
         fetch('/api/timetable/modules'),
         fetch('/api/timetable/override'),
+        fetch('/api/timetable/live'),
       ]);
       const entriesData = await entriesRes.json();
       const modData = await modRes.json();
       const overData = await overRes.json();
+      const liveData = await liveRes.json();
 
       if (entriesData.success) setSlots(entriesData.entries || []);
       if (modData.success) setModules(modData.modules || []);
       if (overData.success) setOverrides(overData.overrides || []);
+      if (liveData.success) {
+        setCurrentTimeStr(liveData.timeContext?.displayTime || '');
+        setCurrentMinutesNow(liveData.timeContext?.minutesNow || 0);
+        setTodayDayOfWeek(liveData.timeContext?.dayOfWeek || 'Monday');
+      }
     } catch (err) {
       console.error('Failed to load timetable:', err);
     } finally {
@@ -88,6 +106,8 @@ export default function AdminTimetablePage() {
 
   useEffect(() => {
     fetchTimetableData();
+    const interval = setInterval(fetchTimetableData, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   const openAddSlotModal = () => {
@@ -405,46 +425,87 @@ export default function AdminTimetablePage() {
             </div>
           ) : (
             <div className="space-y-2.5">
-              {daySlots.map((s) => (
-                <div
-                  key={s.id}
-                  className="border border-slate-200 rounded-2xl p-4 flex items-center justify-between gap-4 hover:border-blue-300 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono text-xs font-bold text-slate-800 bg-slate-100 px-2.5 py-1 rounded-lg whitespace-nowrap">
-                      {s.startTime} – {s.endTime}
-                    </span>
-                    <div>
-                      <div className="font-heading font-black text-sm text-slate-900">
-                        {s.subject || (s.slotType === 'lunch' ? 'Lunch Break' : s.slotType === 'break' ? 'Break' : 'Empty Slot')}
+              {daySlots.map((s) => {
+                const startMin = parseTimeToMinutes(s.startTime);
+                const endMin = parseTimeToMinutes(s.endTime);
+                const isToday = todayDayOfWeek.toLowerCase() === selectedDay.toLowerCase();
+                const isOngoing = isToday && currentMinutesNow >= startMin && currentMinutesNow < endMin;
+                const isLunch = s.slotType === 'lunch';
+                const isBreak = s.slotType === 'break';
+                const isClass = s.slotType === 'class' || (!isLunch && !isBreak);
+
+                let containerStyle = 'border-slate-200 hover:border-blue-300 bg-white';
+                let timeBadgeStyle = 'bg-slate-100 text-slate-800';
+
+                if (isOngoing && isClass) {
+                  containerStyle =
+                    'bg-emerald-50/80 border-2 border-emerald-500 ring-2 ring-emerald-500/25 shadow-md shadow-emerald-500/10';
+                  timeBadgeStyle = 'bg-emerald-600 text-white font-black';
+                } else if (isOngoing && isLunch) {
+                  containerStyle =
+                    'bg-amber-50 border-2 border-amber-400 ring-2 ring-amber-400/25 shadow-md shadow-amber-400/10';
+                  timeBadgeStyle = 'bg-amber-400 text-amber-950 font-black';
+                } else if (isLunch) {
+                  containerStyle = 'bg-amber-50/40 border border-amber-200/80 hover:border-amber-300';
+                  timeBadgeStyle = 'bg-amber-100 text-amber-900 font-bold';
+                } else if (isBreak) {
+                  containerStyle = 'bg-slate-50/60 border border-slate-200 hover:border-slate-300';
+                  timeBadgeStyle = 'bg-slate-100 text-slate-700';
+                }
+
+                return (
+                  <div
+                    key={s.id}
+                    className={`rounded-2xl p-4 flex items-center justify-between gap-4 transition-all ${containerStyle}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex flex-col items-start gap-1">
+                        <span className={`font-mono text-xs font-bold px-2.5 py-1 rounded-lg whitespace-nowrap ${timeBadgeStyle}`}>
+                          {s.startTime} – {s.endTime}
+                        </span>
+                        {isOngoing && isClass && (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-black uppercase bg-emerald-600 text-white animate-pulse">
+                            LIVE NOW
+                          </span>
+                        )}
+                        {isOngoing && isLunch && (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-black uppercase bg-amber-400 text-amber-950 animate-pulse">
+                            LUNCH NOW
+                          </span>
+                        )}
                       </div>
-                      <div className="font-mono text-[11px] text-slate-500">
-                        {s.course === 'ALL' ? 'Common Module' : s.course} · {s.slotType} · {s.studentGroup || 'All'}
+                      <div>
+                        <div className={`font-heading font-black text-sm ${isOngoing && isClass ? 'text-emerald-950' : isLunch ? 'text-amber-950' : 'text-slate-900'}`}>
+                          {s.subject || (s.slotType === 'lunch' ? 'Lunch Break' : s.slotType === 'break' ? 'Break' : 'Empty Slot')}
+                        </div>
+                        <div className={`font-mono text-[11px] ${isOngoing && isClass ? 'text-emerald-700 font-semibold' : 'text-slate-500'}`}>
+                          {s.course === 'ALL' ? 'Common Module' : s.course} · {s.slotType} · {s.studentGroup || 'All'}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="flex items-center gap-1.5">
-                    {/* Edit Button */}
-                    <button
-                      onClick={() => openEditSlotModal(s)}
-                      className="p-2 text-slate-500 hover:text-[#0088FF] rounded-lg hover:bg-blue-50 transition-colors"
-                      title="Edit slot"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      {/* Edit Button */}
+                      <button
+                        onClick={() => openEditSlotModal(s)}
+                        className="p-2 text-slate-500 hover:text-[#0088FF] rounded-lg hover:bg-blue-50 transition-colors"
+                        title="Edit slot"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
 
-                    {/* Delete Button */}
-                    <button
-                      onClick={() => handleDeleteSlot(s.id)}
-                      className="p-2 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
-                      title="Delete slot"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                      {/* Delete Button */}
+                      <button
+                        onClick={() => handleDeleteSlot(s.id)}
+                        className="p-2 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
+                        title="Delete slot"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
