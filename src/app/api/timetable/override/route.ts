@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { saveLectureOverride, getLectureOverrides } from '@/lib/db';
+import { saveLectureOverride, getLectureOverrides, deleteLectureOverride } from '@/lib/db';
 import { TimetableOverride } from '@/types';
 
 export const dynamic = 'force-dynamic';
@@ -39,4 +39,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: err.message || 'Failed to save override' }, { status: 500 });
   }
 }
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get('id');
+    if (!id) {
+      return NextResponse.json({ error: 'Override ID is required' }, { status: 400 });
+    }
+    await deleteLectureOverride(id);
+    return NextResponse.json({ success: true, message: 'Override removed successfully' });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || 'Failed to delete override' }, { status: 500 });
+  }
+}
+
 

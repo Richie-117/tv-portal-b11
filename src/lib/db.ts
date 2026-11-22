@@ -332,6 +332,19 @@ export async function saveLectureOverride(override: TimetableOverride): Promise<
   return override;
 }
 
+export async function deleteLectureOverride(id: string): Promise<boolean> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      await supabase.from('lecture_overrides').delete().eq('id', id);
+    } catch {}
+  }
+  await saveLocalDatabase((db) => {
+    db.lectureOverrides = (db.lectureOverrides || []).filter((o) => o.id !== id);
+  });
+  return true;
+}
+
 // =============================================================================
 // Check-in Broadcast Sessions
 // =============================================================================

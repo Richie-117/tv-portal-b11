@@ -113,7 +113,9 @@ function evaluateCourseStatus(
   const activeOverride = overrides.find(
     (o) =>
       (o.course === course || o.course === 'ALL') &&
-      (!o.slotId || (currentSlot && o.slotId === currentSlot.id))
+      (!o.slotId ||
+        (currentSlot && o.slotId === currentSlot.id) ||
+        (currentSlot && currentSlot.subject && o.subject && o.subject.toLowerCase() === currentSlot.subject.toLowerCase()))
   );
 
   if (activeOverride) {

@@ -58,8 +58,12 @@ export default function AdminTimetablePage() {
   // Override Form
   const [overrideDate, setOverrideDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [overrideAction, setOverrideAction] = useState<'cancel' | 'postpone' | 'reschedule'>('cancel');
+  const [overrideScope, setOverrideScope] = useState<CourseScope>('TPOPT');
   const [overrideSubject, setOverrideSubject] = useState('');
+  const [overrideSlotId, setOverrideSlotId] = useState('');
+  const [selectedOverrideOption, setSelectedOverrideOption] = useState('');
   const [overrideReason, setOverrideReason] = useState('');
+  const [isSubmittingOverride, setIsSubmittingOverride] = useState(false);
 
   const fetchTimetableData = async () => {
     try {
@@ -183,35 +187,110 @@ export default function AdminTimetablePage() {
     }
   };
 
+  const getDayOfWeekFromDate = (dateStr: string): DayOfWeek => {
+    if (!dateStr) return 'Monday';
+    const parts = dateStr.split('-').map(Number);
+    if (parts.length !== 3) return 'Monday';
+    const [y, m, d] = parts;
+    const date = new Date(y, m - 1, d, 12, 0, 0);
+    return date.toLocaleDateString('en-US', { weekday: 'long' }) as DayOfWeek;
+  };
+
+  const handleOverrideOptionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const val = e.target.value;
+    setSelectedOverrideOption(val);
+    if (!val) {
+      setOverrideSubject('');
+      setOverrideSlotId('');
+      return;
+    }
+    if (val.startsWith('slot:')) {
+      const slotId = val.replace('slot:', '');
+      const foundSlot = slots.find((s) => s.id === slotId);
+      if (foundSlot) {
+        setOverrideSlotId(foundSlot.id);
+        setOverrideSubject(foundSlot.subject);
+        if (foundSlot.course) {
+          setOverrideScope((foundSlot.course as CourseScope) || selectedCourse);
+        }
+      }
+    } else if (val.startsWith('mod:')) {
+      const modCode = val.replace('mod:', '');
+      const foundMod = modules.find((m) => m.code === modCode);
+      setOverrideSlotId('');
+      setOverrideSubject(modCode);
+      if (foundMod && foundMod.courseScope) {
+        setOverrideScope(foundMod.courseScope);
+      }
+    } else if (val === 'custom') {
+      setOverrideSlotId('');
+      setOverrideSubject('');
+    }
+  };
+
   const handleCreateOverride = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!overrideSubject) {
-      alert('Please enter affected lecture/subject');
+    if (!overrideSubject.trim()) {
+      alert('Please select or specify the lecture module for this override.');
       return;
     }
 
+    setIsSubmittingOverride(true);
     try {
       const res = await fetch('/api/timetable/override', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          course: selectedCourse,
+          course: overrideScope,
           date: overrideDate,
+          slotId: overrideSlotId || undefined,
           action: overrideAction,
-          subject: overrideSubject,
-          reason: overrideReason,
+          subject: overrideSubject.trim(),
+          reason: overrideReason.trim(),
         }),
       });
       if (res.ok) {
         setOverrideSubject('');
+        setOverrideSlotId('');
+        setSelectedOverrideOption('');
         setOverrideReason('');
         await fetchTimetableData();
-        alert('Override applied successfully! Home and Timetable views are updated.');
+        alert('Date-specific lecture override published successfully! Live status is updated.');
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to apply override');
       }
     } catch {
       alert('Failed to apply override');
+    } finally {
+      setIsSubmittingOverride(false);
     }
   };
+
+  const handleDeleteOverride = async (id: string) => {
+    if (!confirm('Revert this lecture override? The regular timetable will resume.')) return;
+    try {
+      const res = await fetch(`/api/timetable/override?id=${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        await fetchTimetableData();
+      } else {
+        alert('Failed to delete override');
+      }
+    } catch {
+      alert('Failed to delete override');
+    }
+  };
+
+  const overrideDayOfWeek = getDayOfWeekFromDate(overrideDate);
+  const scheduledSlotsOnOverrideDay = slots.filter(
+    (s) =>
+      (s.course === overrideScope || overrideScope === 'ALL' || s.course === 'ALL') &&
+      s.dayOfWeek.toLowerCase() === overrideDayOfWeek.toLowerCase() &&
+      s.slotType === 'class' &&
+      s.subject &&
+      s.subject !== 'Break' &&
+      s.subject !== 'Lunch Break'
+  );
 
   const daySlots = slots.filter(
     (s) => (s.course === selectedCourse || s.course === 'ALL') && s.dayOfWeek.toLowerCase() === selectedDay.toLowerCase()
@@ -373,65 +452,220 @@ export default function AdminTimetablePage() {
 
         {/* Lecture Overrides Card */}
         <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 text-slate-900">
-            <AlertCircle className="w-5 h-5 text-amber-500" />
-            <h2 className="font-heading font-black text-lg">
-              Apply Date-Specific Lecture Override
-            </h2>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-slate-900">
+              <AlertCircle className="w-5 h-5 text-amber-500" />
+              <h2 className="font-heading font-black text-lg">
+                Apply Date-Specific Lecture Override
+              </h2>
+            </div>
+            <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 text-amber-800 font-bold">
+              {overrideDayOfWeek} Schedule Active
+            </span>
           </div>
           <p className="text-xs text-slate-500">
-            Cancel or postpone a lecture on a specific date. Changes will automatically reflect on Home and Timetable views.
+            Cancel or postpone a lecture on a specific date. Select from scheduled lectures on that day or available curriculum modules. Changes synchronize live to Home and Timetable views.
           </p>
 
-          <form onSubmit={handleCreateOverride} className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-            <div>
-              <label className="block text-[11px] font-mono font-bold text-slate-700 uppercase mb-1">
-                Date
-              </label>
-              <input
-                type="date"
-                value={overrideDate}
-                onChange={(e) => setOverrideDate(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono"
-              />
+          <form onSubmit={handleCreateOverride} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-[11px] font-mono font-bold text-slate-700 uppercase mb-1">
+                  Target Date
+                </label>
+                <input
+                  type="date"
+                  value={overrideDate}
+                  onChange={(e) => setOverrideDate(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-mono font-bold text-slate-700 uppercase mb-1">
+                  Action
+                </label>
+                <select
+                  value={overrideAction}
+                  onChange={(e) => setOverrideAction(e.target.value as any)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold"
+                >
+                  <option value="cancel">Cancel Lecture</option>
+                  <option value="postpone">Postpone Lecture</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-mono font-bold text-slate-700 uppercase mb-1">
+                  Scope
+                </label>
+                <select
+                  value={overrideScope}
+                  onChange={(e) => setOverrideScope(e.target.value as CourseScope)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold"
+                >
+                  <option value={selectedCourse}>{selectedCourse} Only</option>
+                  <option value="ALL">All TV Courses (Both TPOPT & TPRPT)</option>
+                  <option value={selectedCourse === 'TPOPT' ? 'TPRPT' : 'TPOPT'}>
+                    {selectedCourse === 'TPOPT' ? 'TPRPT Only' : 'TPOPT Only'}
+                  </option>
+                </select>
+              </div>
             </div>
 
+            {/* Subject Selector & Live Sync */}
             <div>
-              <label className="block text-[11px] font-mono font-bold text-slate-700 uppercase mb-1">
-                Action
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[11px] font-mono font-bold text-slate-700 uppercase">
+                  Selective Subject / Module
+                </label>
+                <span className="text-[10px] font-mono text-slate-500">
+                  {overrideDayOfWeek} · {scheduledSlotsOnOverrideDay.length} lecture slot(s) scheduled
+                </span>
+              </div>
               <select
-                value={overrideAction}
-                onChange={(e) => setOverrideAction(e.target.value as any)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold"
+                value={selectedOverrideOption}
+                onChange={handleOverrideOptionChange}
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs font-semibold focus:ring-2 focus:ring-[#0088FF] focus:border-[#0088FF] outline-none bg-slate-50/50"
               >
-                <option value="cancel">Cancel Lecture</option>
-                <option value="postpone">Postpone Lecture</option>
+                <option value="">-- Choose Module or Scheduled Lecture --</option>
+                
+                {/* 1. Scheduled lectures on that specific day */}
+                {scheduledSlotsOnOverrideDay.length > 0 && (
+                  <optgroup label={`📅 Scheduled Lectures on ${overrideDayOfWeek} (${overrideDate})`}>
+                    {scheduledSlotsOnOverrideDay.map((s) => (
+                      <option key={s.id} value={`slot:${s.id}`}>
+                        ⭐ {s.startTime} - {s.endTime} : {s.subject} ({s.course} · {s.studentGroup || 'All'})
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+
+                {/* 2. Available curriculum modules */}
+                <optgroup label="📚 Available Curriculum Modules (Database)">
+                  {modules.map((m) => (
+                    <option key={m.id} value={`mod:${m.code}`}>
+                      {m.code} — {m.title} ({m.courseScope})
+                    </option>
+                  ))}
+                </optgroup>
+
+                {/* 3. Manual entry */}
+                <optgroup label="✏️ Custom / Manual">
+                  <option value="custom">Manual Subject Entry...</option>
+                </optgroup>
               </select>
             </div>
 
-            <div>
-              <label className="block text-[11px] font-mono font-bold text-slate-700 uppercase mb-1">
-                Subject
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. ENGLISH or ICT"
-                value={overrideSubject}
-                onChange={(e) => setOverrideSubject(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
-              />
-            </div>
+            {/* If custom or refined subject */}
+            {(selectedOverrideOption === 'custom' || overrideSubject) && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="block text-[11px] font-mono font-bold text-slate-700 uppercase mb-1">
+                    Selected Subject / Module {overrideSlotId && <span className="text-emerald-600 lowercase font-normal">(synchronized to scheduled slot)</span>}
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. ENGLISH or DM10"
+                    value={overrideSubject}
+                    onChange={(e) => setOverrideSubject(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-mono font-bold text-slate-700 uppercase mb-1">
+                    Reason / Notice (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Visiting lecturer unavailable, postponed"
+                    value={overrideReason}
+                    onChange={(e) => setOverrideReason(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs bg-white"
+                  />
+                </div>
+              </div>
+            )}
 
-            <div className="flex items-end">
+            <div className="flex justify-end pt-2">
               <button
                 type="submit"
-                className="w-full py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-mono text-xs font-bold transition-all cursor-pointer"
+                disabled={!overrideSubject || isSubmittingOverride}
+                className="py-2.5 px-6 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-mono text-xs font-bold transition-all shadow-sm cursor-pointer flex items-center gap-2"
               >
-                Publish Override
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>{isSubmittingOverride ? 'Publishing...' : 'Publish Override & Sync'}</span>
               </button>
             </div>
           </form>
+
+          {/* Active Overrides List with Delete button */}
+          {overrides.length > 0 && (
+            <div className="border-t border-slate-100 pt-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="font-heading font-black text-xs text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                  <span>Active Lecture Overrides</span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-slate-100 text-slate-600">
+                    {overrides.length}
+                  </span>
+                </h3>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2">
+                {overrides.map((ovr) => {
+                  const isForSelectedDate = ovr.date === overrideDate;
+                  return (
+                    <div
+                      key={ovr.id}
+                      className={`p-3.5 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                        isForSelectedDate
+                          ? 'bg-amber-50/50 border-amber-200/80 ring-1 ring-amber-300/30'
+                          : 'bg-slate-50/50 border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-mono font-black uppercase ${
+                            ovr.action === 'cancel'
+                              ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                              : 'bg-amber-100 text-amber-800 border border-amber-200'
+                          }`}
+                        >
+                          {ovr.action}
+                        </span>
+                        <div>
+                          <div className="font-heading font-bold text-sm text-slate-900 flex items-center gap-2">
+                            <span>{ovr.subject}</span>
+                            <span className="text-[10px] font-mono font-normal text-slate-500">
+                              ({ovr.course})
+                            </span>
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-500 flex items-center gap-2 mt-0.5">
+                            <span>📅 {ovr.date}</span>
+                            {ovr.reason && (
+                              <>
+                                <span>·</span>
+                                <span className="italic">{ovr.reason}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteOverride(ovr.id)}
+                        className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all self-end sm:self-center cursor-pointer"
+                        title="Delete / Revert Override"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
       </div>

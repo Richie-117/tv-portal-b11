@@ -2382,26 +2382,6 @@
       "notes": "",
       "createdBy": "Administrator",
       "createdAt": "2026-11-22T18:12:28.347Z"
-    },
-    {
-      "id": "sess-1795366571618",
-      "course": "TPOPT",
-      "moduleId": "sub-ict",
-      "moduleCode": "ICT",
-      "moduleTitle": "Information & Communication Technology",
-      "sessionType": "practical",
-      "date": "2026-11-23",
-      "startTime": "08:30",
-      "endTime": "11:30",
-      "checkinStatus": "closed",
-      "sessionStatus": "active",
-      "checkinWindowMinutes": 30,
-      "checkinOpenedAt": "2026-11-22T16:56:11.618Z",
-      "checkinExpiresAt": "2026-11-22T17:26:11.618Z",
-      "notes": "Studio Practical Session",
-      "createdBy": "Administrator",
-      "createdAt": "2026-11-22T16:56:11.618Z",
-      "updatedAt": "2026-11-22T17:13:29.874Z"
     }
   ],
   "attendanceRecords": [
@@ -2452,7 +2432,21 @@
       "deviceFingerprint": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36"
     }
   ],
-  "invitations": [],
+  "invitations": [
+    {
+      "id": "inv-1795372678738",
+      "studentId": "student-tpopt-005",
+      "studentNumber": "RT/TPOPT/26/02",
+      "course": "TPOPT",
+      "tokenHash": "5d204cedfcfc47707b3cb0810761e23c635613858425ba7922bf9b27edac6fd8",
+      "tokenClear": "B11-7DDB-CB1F",
+      "isRedeemed": true,
+      "expiresAt": "2026-12-06T18:37:58.738Z",
+      "createdAt": "2026-11-22T18:37:58.738Z",
+      "redeemedBy": "usr-1795372684521",
+      "redeemedAt": "2026-11-22T18:38:04.526Z"
+    }
+  ],
   "users": [
     {
       "id": "admin-001",
@@ -2463,6 +2457,19 @@
       "passwordHash": "$2a$10$diwQ26rm51lY7j5MDvy/LO2qjPLhgItNzE6xPsLGQ2zFmBwYZp49O",
       "isActive": true,
       "createdAt": "2026-11-22T16:40:47.955Z"
+    },
+    {
+      "id": "usr-1795372684521",
+      "username": "RT/TPOPT/26/02",
+      "role": "admin",
+      "studentId": "student-tpopt-005",
+      "studentNumber": "RT/TPOPT/26/02",
+      "course": "TPOPT",
+      "fullName": "P.A. Hesan Samudika",
+      "passwordHash": "$2a$10$skOYjhjEQoLZOfxPjDB9tOxP8XS0AG42ja2dzLidvfNjju8..r0D6",
+      "isActive": true,
+      "isRepresentative": true,
+      "createdAt": "2026-11-22T18:38:04.521Z"
     }
   ]
 }
