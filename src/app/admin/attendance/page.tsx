@@ -69,6 +69,9 @@ export default function AdminAttendancePage() {
   const [showFinalizeModal, setShowFinalizeModal] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
 
+  // Broadcast Course Filter: 'ALL' | 'COMMON' | 'TPOPT' | 'TPRPT'
+  const [broadcastCourseFilter, setBroadcastCourseFilter] = useState<'ALL' | 'COMMON' | 'TPOPT' | 'TPRPT'>('ALL');
+
   // Student Attendance Inspector State
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
   const [inspectorSearch, setInspectorSearch] = useState('');
@@ -78,8 +81,8 @@ export default function AdminAttendancePage() {
   const [calendarDate, setCalendarDate] = useState(() => new Date(2026, 10, 1)); // November 2026
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
 
-  const fetchAllData = async () => {
-    setIsRefreshing(true);
+  const fetchAllData = async (showIndicator = true) => {
+    if (showIndicator) setIsRefreshing(true);
     try {
       const [sessRes, recRes, stuRes] = await Promise.all([
         fetch('/api/admin/broadcast'),
@@ -104,8 +107,10 @@ export default function AdminAttendancePage() {
     } catch (err) {
       console.error('Failed to load attendance data:', err);
     } finally {
-      setLoading(false);
-      setTimeout(() => setIsRefreshing(false), 300);
+      if (showIndicator) {
+        setLoading(false);
+        setTimeout(() => setIsRefreshing(false), 300);
+      }
     }
   };
 
@@ -123,7 +128,16 @@ export default function AdminAttendancePage() {
       { id: 'sub-graphic', code: 'CGD', title: 'Computer Graphic Design' },
       { id: 'sub-osh', code: 'OSH', title: 'Occupational Safety & Health' },
     ]);
-  }, []);
+
+    // Live Telemetry Auto-Poll: Silently refresh records every 4s so student submissions update live
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible' && !isSaving && !isFinalizing) {
+        fetchAllData(false);
+      }
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [isSaving, isFinalizing]);
 
   const openSessionEditor = async (session: CheckinSession) => {
     setActiveEditorSession(session);
@@ -278,6 +292,53 @@ export default function AdminAttendancePage() {
     }
   };
 
+  // Calculate real-time submission statistics for any session card
+  const getSessionSubmissionStats = (sess: CheckinSession) => {
+    const sessionRecords = allRecords.filter((r) => r.sessionId === sess.id);
+    const presentRecords = sessionRecords.filter((r) => r.status === 'present');
+    const excusedRecords = sessionRecords.filter((r) => r.status === 'excused');
+    const absentRecords = sessionRecords.filter((r) => r.status === 'absent');
+
+    const tpoptStudents = students.filter((s) => s.course === 'TPOPT');
+    const tprptStudents = students.filter((s) => s.course === 'TPRPT');
+    const totalTpopt = tpoptStudents.length || 26;
+    const totalTprpt = tprptStudents.length || 22;
+
+    const tpoptPresent = presentRecords.filter((r) => r.course === 'TPOPT').length;
+    const tprptPresent = presentRecords.filter((r) => r.course === 'TPRPT').length;
+
+    let totalEligible = totalTpopt + totalTprpt;
+    let submittedCount = presentRecords.length;
+
+    if (sess.course === 'TPOPT') {
+      totalEligible = totalTpopt;
+      submittedCount = tpoptPresent;
+    } else if (sess.course === 'TPRPT') {
+      totalEligible = totalTprpt;
+      submittedCount = tprptPresent;
+    }
+
+    const percentage = totalEligible > 0 ? Math.round((submittedCount / totalEligible) * 100) : 0;
+
+    return {
+      submittedCount,
+      totalEligible,
+      percentage,
+      excusedCount: excusedRecords.length,
+      absentCount: absentRecords.length,
+      isCommon: sess.course === 'ALL',
+      tpopt: { submitted: tpoptPresent, total: totalTpopt },
+      tprpt: { submitted: tprptPresent, total: totalTprpt },
+    };
+  };
+
+  // Filtered broadcast sessions by Course Tab (ALL, COMMON, TPOPT, TPRPT)
+  const filteredBroadcastSessions = useMemo(() => {
+    if (broadcastCourseFilter === 'ALL') return sessions;
+    if (broadcastCourseFilter === 'COMMON') return sessions.filter((s) => s.course === 'ALL');
+    return sessions.filter((s) => s.course === broadcastCourseFilter);
+  }, [sessions, broadcastCourseFilter]);
+
   // Filter roster by search
   const filteredRoster = useMemo(() => {
     if (!searchTerm) return roster;
@@ -423,7 +484,7 @@ export default function AdminAttendancePage() {
 
           <div className="flex items-center gap-2 justify-end">
             <button
-              onClick={fetchAllData}
+              onClick={() => fetchAllData()}
               className="p-2 text-slate-400 hover:text-[#0088FF] rounded-xl hover:bg-slate-50 bg-white border border-slate-200"
               title="Refresh attendance records"
             >
@@ -453,91 +514,208 @@ export default function AdminAttendancePage() {
                 <span className="hud-corner-bl" />
                 <span className="hud-corner-br" />
 
-                <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
                   <div>
                     <h1 className="font-heading font-black text-xl text-slate-900 tracking-tight">
                       Attendance Roll-Call Broadcasts
                     </h1>
                     <p className="text-xs text-slate-500 font-medium">
-                      Push mobile check-ins and monitor incoming student roll-call telemetry
+                      Live student check-in telemetry and submitted roll-call rates
                     </p>
+                  </div>
+
+                  {/* Course Filter Tabs */}
+                  <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200">
+                    {[
+                      { key: 'ALL', label: 'All Broadcasts' },
+                      { key: 'COMMON', label: 'Common (Both)' },
+                      { key: 'TPOPT', label: 'TPOPT' },
+                      { key: 'TPRPT', label: 'TPRPT' },
+                    ].map((tab) => {
+                      const count =
+                        tab.key === 'ALL'
+                          ? sessions.length
+                          : tab.key === 'COMMON'
+                          ? sessions.filter((s) => s.course === 'ALL').length
+                          : sessions.filter((s) => s.course === tab.key).length;
+                      return (
+                        <button
+                          key={tab.key}
+                          type="button"
+                          onClick={() => setBroadcastCourseFilter(tab.key as any)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold transition-all flex items-center gap-1.5 ${
+                            broadcastCourseFilter === tab.key
+                              ? 'bg-white text-slate-900 shadow-sm'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          <span>{tab.label}</span>
+                          <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                            broadcastCourseFilter === tab.key ? 'bg-slate-100 text-slate-900' : 'bg-slate-200/60 text-slate-500'
+                          }`}>
+                            {count}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
                 {loading ? (
                   <div className="py-12 text-center text-slate-400 font-mono text-xs animate-pulse">
-                    Loading session broadcasts...
+                    Loading session broadcasts and student telemetry...
                   </div>
-                ) : sessions.length === 0 ? (
+                ) : filteredBroadcastSessions.length === 0 ? (
                   <div className="text-center py-12 space-y-3">
                     <Radio className="w-12 h-12 mx-auto text-slate-300" />
                     <p className="font-heading font-bold text-base text-slate-700">
-                      No attendance sessions created yet
+                      No attendance sessions found
                     </p>
                     <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                      Click &quot;New Check-in Record&quot; to open a live check-in broadcast for TPOPT or TPRPT.
+                      {broadcastCourseFilter !== 'ALL'
+                        ? `No broadcasts found for ${broadcastCourseFilter}. Click "New Check-in Record" to create one.`
+                        : 'Click "New Check-in Record" to open a live check-in broadcast for TPOPT or TPRPT.'}
                     </p>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {sessions.map((sess) => (
-                      <div
-                        key={sess.id}
-                        className="border border-slate-200 rounded-2xl p-4 sm:p-5 hover:border-blue-300 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-                      >
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-black uppercase ${
-                              sess.checkinStatus === 'active'
-                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 animate-pulse'
-                                : sess.checkinStatus === 'finalized'
-                                ? 'bg-blue-100 text-[#0088FF] border border-blue-200'
-                                : 'bg-slate-100 text-slate-700'
-                            }`}>
-                              {sess.checkinStatus}
-                            </span>
-                            <span className="font-mono text-[11px] font-bold text-slate-500">
-                              {sess.date} · {sess.startTime} – {sess.endTime}
-                            </span>
+                    {filteredBroadcastSessions.map((sess) => {
+                      const stats = getSessionSubmissionStats(sess);
+
+                      return (
+                        <div
+                          key={sess.id}
+                          className="border border-slate-200 rounded-2xl p-4 sm:p-5 hover:border-blue-300 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white"
+                        >
+                          <div className="space-y-2.5 flex-1">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-black uppercase ${
+                                  sess.checkinStatus === 'active'
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 animate-pulse'
+                                    : sess.checkinStatus === 'finalized'
+                                    ? 'bg-blue-100 text-[#0088FF] border border-blue-200'
+                                    : 'bg-slate-100 text-slate-700'
+                                }`}>
+                                  {sess.checkinStatus}
+                                </span>
+                                <span className="font-mono text-[11px] font-bold text-slate-500">
+                                  {sess.date} · {sess.startTime} – {sess.endTime}
+                                </span>
+                                {sess.checkinStatus === 'active' && (
+                                  <span className="inline-flex items-center gap-1 font-mono text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg animate-pulse">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                                    Live Submitting
+                                  </span>
+                                )}
+                              </div>
+
+                              <h3 className="font-heading font-black text-lg text-slate-900 leading-tight">
+                                {sess.moduleTitle}
+                              </h3>
+
+                              <div className="text-xs font-mono text-slate-500 font-semibold">
+                                Scope: <span className="text-slate-800">{sess.course === 'ALL' ? 'COMMON (Both Courses)' : sess.course}</span> · Window: {sess.checkinWindowMinutes} mins
+                              </div>
+                            </div>
+
+                            {/* Submitted Count & Filtered Course Breakdown on Card Surface */}
+                            <div className="pt-2 border-t border-slate-100 space-y-2">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  {/* Submitted Count Pill */}
+                                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white font-mono text-xs font-bold shadow-sm">
+                                    <Users className="w-3.5 h-3.5 text-[#0088FF]" />
+                                    <span>Submitted:</span>
+                                    <span className="text-emerald-400 font-black text-sm">
+                                      {stats.submittedCount} / {stats.totalEligible}
+                                    </span>
+                                  </span>
+
+                                  {/* Percentage Badge */}
+                                  <span className="font-mono text-xs font-black text-[#0088FF] bg-blue-50 border border-blue-200 px-2.5 py-1.5 rounded-xl">
+                                    {stats.percentage}%
+                                  </span>
+                                </div>
+
+                                {/* Common / Individual Course Filtered Breakdown */}
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {stats.isCommon ? (
+                                    <>
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-orange-50 text-[#FF7900] border border-orange-200 font-mono text-[11px] font-bold">
+                                        <span>TPOPT:</span>
+                                        <span className="font-black">{stats.tpopt.submitted} / {stats.tpopt.total}</span>
+                                      </span>
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-blue-50 text-[#0088FF] border border-blue-200 font-mono text-[11px] font-bold">
+                                        <span>TPRPT:</span>
+                                        <span className="font-black">{stats.tprpt.submitted} / {stats.tprpt.total}</span>
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl font-mono text-[11px] font-bold ${
+                                      sess.course === 'TPOPT'
+                                        ? 'bg-orange-50 text-[#FF7900] border border-orange-200'
+                                        : 'bg-blue-50 text-[#0088FF] border border-blue-200'
+                                    }`}>
+                                      <span>{sess.course} Cohort:</span>
+                                      <span className="font-black">{stats.submittedCount} / {stats.totalEligible}</span>
+                                    </span>
+                                  )}
+
+                                  {stats.excusedCount > 0 && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-xl bg-amber-50 text-amber-800 border border-amber-200 font-mono text-[10px] font-bold">
+                                      Excused: {stats.excusedCount}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Responsive Visual Progress Bar */}
+                              <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden border border-slate-200/80">
+                                <div
+                                  className={`h-full transition-all duration-500 rounded-full ${
+                                    stats.percentage === 100
+                                      ? 'bg-emerald-500'
+                                      : stats.percentage > 0
+                                      ? 'bg-[#0088FF]'
+                                      : 'bg-slate-300'
+                                  }`}
+                                  style={{ width: `${Math.min(100, Math.max(0, stats.percentage))}%` }}
+                                />
+                              </div>
+                            </div>
                           </div>
 
-                          <h3 className="font-heading font-black text-lg text-slate-900 leading-tight">
-                            {sess.moduleTitle}
-                          </h3>
+                          {/* Action Buttons */}
+                          <div className="flex items-center gap-2 flex-shrink-0 self-end md:self-center">
+                            {sess.checkinStatus === 'active' && (
+                              <button
+                                onClick={() => handleCloseSessionEarly(sess.id)}
+                                className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-mono text-xs font-bold transition-all active:scale-95 cursor-pointer"
+                              >
+                                Close Window
+                              </button>
+                            )}
 
-                          <div className="text-xs font-mono text-slate-500 font-semibold">
-                            Scope: <span className="text-slate-800">{sess.course === 'ALL' ? 'COMMON (Both Courses)' : sess.course}</span> · Window: {sess.checkinWindowMinutes} mins
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          {sess.checkinStatus === 'active' && (
                             <button
-                              onClick={() => handleCloseSessionEarly(sess.id)}
-                              className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-mono text-xs font-bold transition-all active:scale-95 cursor-pointer"
+                              onClick={() => openSessionEditor(sess)}
+                              className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-heading font-black text-xs uppercase tracking-wider transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer touch-target"
                             >
-                              Close Window
+                              <span>Edit Attendance</span>
+                              <ChevronRight className="w-3.5 h-3.5" />
                             </button>
-                          )}
 
-                          <button
-                            onClick={() => openSessionEditor(sess)}
-                            className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-heading font-black text-xs uppercase tracking-wider transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer touch-target"
-                          >
-                            <span>Edit Attendance</span>
-                            <ChevronRight className="w-3.5 h-3.5" />
-                          </button>
-
-                          <button
-                            onClick={() => handleDeleteSession(sess.id, sess.moduleTitle)}
-                            className="p-2.5 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 hover:border-rose-200 transition-colors cursor-pointer"
-                            title="Delete this record card"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                            <button
+                              onClick={() => handleDeleteSession(sess.id, sess.moduleTitle)}
+                              className="p-2.5 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 hover:border-rose-200 transition-colors cursor-pointer"
+                              title="Delete this record card"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
