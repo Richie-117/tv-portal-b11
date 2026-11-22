@@ -132,6 +132,19 @@ function evaluateCourseStatus(
         currentTimeStr: timeContext.displayTime,
       };
     }
+    if (activeOverride.action === 'holiday') {
+      return {
+        course,
+        courseName,
+        status: 'STANDBY',
+        statusLabel: `Holiday: ${activeOverride.subject || 'Academic Recess'}`,
+        currentSlot: null,
+        nextSlot: null,
+        override: activeOverride,
+        dayOfWeek: timeContext.dayOfWeek,
+        currentTimeStr: timeContext.displayTime,
+      };
+    }
     if (activeOverride.action === 'postpone') {
       return {
         course,

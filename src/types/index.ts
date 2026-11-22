@@ -44,7 +44,7 @@ export interface TimetableOverride {
   dayOfWeek?: DayOfWeek;
   date: string; // YYYY-MM-DD
   slotId?: string;
-  action: 'cancel' | 'postpone' | 'reschedule';
+  action: 'cancel' | 'postpone' | 'reschedule' | 'holiday';
   subject: string;
   reason?: string;
   newDate?: string;

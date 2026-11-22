@@ -17,19 +17,49 @@ import {
   Info,
   Shield,
   ArrowRight,
+  Trash2,
 } from 'lucide-react';
 import { calculateStudentAttendanceMetrics } from '@/lib/attendanceCalculations';
+import { TimetableOverride, CourseScope } from '@/types';
 
 export default function ProfilePage() {
   const router = useRouter();
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [sessions, setSessions] = useState<any[]>([]);
   const [records, setRecords] = useState<any[]>([]);
+  const [overrides, setOverrides] = useState<TimetableOverride[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Calendar Month Navigation — Locked to start at November 2026
   const [currentDate, setCurrentDate] = useState(() => new Date(2026, 10, 1)); // November 2026
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
+
+  // Admin Day State Manager (Available to Admin and Course Representatives)
+  const [adminDayAction, setAdminDayAction] = useState<'holiday' | 'cancel' | 'postpone'>('holiday');
+  const [adminDayScope, setAdminDayScope] = useState<CourseScope>('ALL');
+  const [adminDayTitle, setAdminDayTitle] = useState('');
+  const [adminDayReason, setAdminDayReason] = useState('');
+  const [isSavingAdminDay, setIsSavingAdminDay] = useState(false);
+
+  const fetchAllProfileData = async () => {
+    try {
+      const [sessRes, attRes, ovrRes] = await Promise.all([
+        fetch('/api/admin/broadcast'),
+        fetch('/api/admin/attendance'),
+        fetch('/api/timetable/override'),
+      ]);
+      const [sessData, attData, ovrData] = await Promise.all([
+        sessRes.json(),
+        attRes.json(),
+        ovrRes.json(),
+      ]);
+      if (sessData.success) setSessions(sessData.sessions || []);
+      if (attData.success) setRecords(attData.records || []);
+      if (ovrData.success) setOverrides(ovrData.overrides || []);
+    } catch (err) {
+      console.error('Failed to load profile data:', err);
+    }
+  };
 
   useEffect(() => {
     fetch('/api/auth/me')
@@ -43,14 +73,7 @@ export default function ProfilePage() {
             localStorage.setItem('tv_saved_user', JSON.stringify(data.user));
           } catch {}
 
-          Promise.all([
-            fetch('/api/admin/broadcast').then((r) => r.json()),
-            fetch('/api/admin/attendance').then((r) => r.json()),
-          ]).then(([sessData, attData]) => {
-            if (sessData.success) setSessions(sessData.sessions || []);
-            if (attData.success) setRecords(attData.records || []);
-            setLoading(false);
-          });
+          fetchAllProfileData().finally(() => setLoading(false));
         }
       })
       .catch(() => {
@@ -136,6 +159,67 @@ export default function ProfilePage() {
     if (!selectedCalendarDate) return [];
     return sessionByDate.get(selectedCalendarDate) || [];
   }, [selectedCalendarDate, sessionByDate]);
+
+  const selectedDateOverrides = useMemo(() => {
+    if (!selectedCalendarDate) return [];
+    return overrides.filter(
+      (o) =>
+        o.date === selectedCalendarDate &&
+        (o.course === currentUser?.course || o.course === 'ALL' || !currentUser?.course)
+    );
+  }, [selectedCalendarDate, overrides, currentUser]);
+
+  const handleSetAdminDayState = async () => {
+    if (!selectedCalendarDate) return;
+    setIsSavingAdminDay(true);
+    try {
+      const res = await fetch('/api/timetable/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          course: adminDayScope,
+          date: selectedCalendarDate,
+          action: adminDayAction,
+          subject:
+            adminDayTitle.trim() ||
+            (adminDayAction === 'holiday'
+              ? 'Public / Academic Holiday'
+              : adminDayAction === 'cancel'
+              ? 'All Lectures Canceled'
+              : 'Lectures Postponed'),
+          reason: adminDayReason.trim() || undefined,
+          updatedBy: currentUser?.fullName || 'Representative',
+        }),
+      });
+      if (res.ok) {
+        setAdminDayTitle('');
+        setAdminDayReason('');
+        await fetchAllProfileData();
+        alert(`Date override saved successfully for ${selectedCalendarDate}`);
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to set date override');
+      }
+    } catch {
+      alert('Failed to set date override');
+    } finally {
+      setIsSavingAdminDay(false);
+    }
+  };
+
+  const handleRemoveOverride = async (id: string) => {
+    if (!confirm('Revert this date override? This will restore the date as a regular day.')) return;
+    try {
+      const res = await fetch(`/api/timetable/override?id=${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        await fetchAllProfileData();
+      } else {
+        alert('Failed to remove override');
+      }
+    } catch {
+      alert('Failed to remove override');
+    }
+  };
 
   if (loading) {
     return (
@@ -321,27 +405,68 @@ export default function ProfilePage() {
                 const daySessions = sessionByDate.get(cell.dateStr) || [];
                 const isSelected = selectedCalendarDate === cell.dateStr;
 
+                const dayOverrides = overrides.filter(
+                  (o) =>
+                    o.date === cell.dateStr &&
+                    (o.course === currentUser?.course || o.course === 'ALL' || !currentUser?.course)
+                );
+                const hasHoliday = dayOverrides.some((o) => o.action === 'holiday');
+                const hasCanceled = dayOverrides.some((o) => o.action === 'cancel');
+                const hasPostponed = dayOverrides.some((o) => o.action === 'postpone');
+
                 const hasPresent = daySessions.some((s: any) => s.status === 'present');
                 const hasAbsent = daySessions.some((s: any) => s.status === 'absent');
                 const hasExcused = daySessions.some((s: any) => s.status === 'excused');
+
+                let cellBgClass = 'border-slate-200 hover:border-slate-300 bg-white';
+                let dayNumClass = 'text-slate-800';
+
+                if (hasHoliday) {
+                  cellBgClass = 'bg-purple-50/80 border-purple-300 hover:border-purple-400';
+                  dayNumClass = 'text-purple-900 font-black';
+                } else if (hasCanceled) {
+                  cellBgClass = 'bg-rose-50/80 border-rose-300 hover:border-rose-400';
+                  dayNumClass = 'text-rose-900 font-black';
+                } else if (hasPostponed) {
+                  cellBgClass = 'bg-amber-50/80 border-amber-300 hover:border-amber-400';
+                  dayNumClass = 'text-amber-900 font-black';
+                }
+
+                if (isSelected) {
+                  cellBgClass += ' ring-2 ring-[#0088FF] shadow-sm';
+                }
 
                 return (
                   <button
                     key={cell.dateStr}
                     type="button"
                     onClick={() => setSelectedCalendarDate(cell.dateStr)}
-                    className={`h-14 sm:h-16 rounded-xl p-1.5 flex flex-col justify-between text-left transition-all relative border touch-target cursor-pointer ${
-                      isSelected
-                        ? 'border-[#0088FF] bg-blue-50/80 ring-2 ring-[#0088FF]/20 shadow-sm'
-                        : 'border-slate-200 hover:border-slate-300 bg-white'
-                    }`}
+                    className={`h-14 sm:h-16 rounded-xl p-1.5 flex flex-col justify-between text-left transition-all relative border touch-target cursor-pointer ${cellBgClass}`}
                   >
-                    <span className="font-mono text-xs font-bold text-slate-800">
-                      {cell.dayNumber}
-                    </span>
+                    <div className="flex items-center justify-between w-full">
+                      <span className={`font-mono text-xs font-bold ${dayNumClass}`}>
+                        {cell.dayNumber}
+                      </span>
+                      {hasHoliday && (
+                        <span className="hidden sm:inline-block px-1 py-0.2 rounded text-[7px] font-mono font-black bg-purple-100 text-purple-800 border border-purple-200 uppercase">
+                          HOLIDAY
+                        </span>
+                      )}
+                      {hasCanceled && !hasHoliday && (
+                        <span className="hidden sm:inline-block px-1 py-0.2 rounded text-[7px] font-mono font-black bg-rose-100 text-rose-800 border border-rose-200 uppercase">
+                          CANCELED
+                        </span>
+                      )}
+                    </div>
 
-                    {/* Status Dots */}
-                    <div className="flex items-center gap-1">
+                    {/* Status Badges & Dots */}
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {hasHoliday && (
+                        <span className="w-2 h-2 rounded-full bg-purple-500 sm:hidden" title="Holiday" />
+                      )}
+                      {hasCanceled && (
+                        <span className="w-2 h-2 rounded-full bg-rose-500 sm:hidden" title="Lectures Canceled" />
+                      )}
                       {hasPresent && <span className="w-2 h-2 rounded-full bg-emerald-500" title="Present" />}
                       {hasAbsent && <span className="w-2 h-2 rounded-full bg-rose-500" title="Absent" />}
                       {hasExcused && <span className="w-2 h-2 rounded-full bg-amber-500" title="Excused" />}
@@ -350,63 +475,221 @@ export default function ProfilePage() {
                 );
               })}
             </div>
+
+            {/* Calendar Status Legend */}
+            <div className="flex items-center gap-3 sm:gap-4 flex-wrap text-[11px] font-mono text-slate-500 pt-3 border-t border-slate-100">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                <span>Present</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-rose-500" />
+                <span>Absent</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                <span>Excused</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded bg-purple-100 border border-purple-300" />
+                <span className="text-purple-700 font-bold">Holiday / Off Day</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded bg-rose-100 border border-rose-300" />
+                <span className="text-rose-700 font-bold">Lectures Canceled</span>
+              </div>
+            </div>
           </div>
 
           {/* Date Details Drawer / Card */}
           {selectedCalendarDate && (
-            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3 animate-in fade-in duration-150">
+            <div className="p-4 sm:p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-4 animate-in fade-in duration-150">
               <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                <span className="font-mono text-xs font-bold text-slate-800">
-                  Lecture Details for {selectedCalendarDate}
-                </span>
-                <span className="text-[11px] font-mono text-slate-500">
-                  {selectedDateSessions.length} session(s) recorded
-                </span>
+                <div className="flex items-center gap-2">
+                  <CalendarIcon className="w-4 h-4 text-[#0088FF]" />
+                  <span className="font-mono text-xs font-bold text-slate-800">
+                    Date Details & Schedule for {selectedCalendarDate}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedCalendarDate(null)}
+                  className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200/60"
+                  aria-label="Close"
+                >
+                  <XCircle className="w-4 h-4" />
+                </button>
               </div>
 
-              {selectedDateSessions.length === 0 ? (
-                <p className="text-xs text-slate-500 font-medium py-1">
-                  No attendance session was conducted or scheduled on this date.
-                </p>
-              ) : (
+              {/* Active Overrides for this Date */}
+              {selectedDateOverrides.length > 0 && (
                 <div className="space-y-2">
-                  {selectedDateSessions.map((sess: any, sIdx: number) => (
+                  {selectedDateOverrides.map((ovr) => (
                     <div
-                      key={sIdx}
-                      className="bg-white border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-3 text-xs"
+                      key={ovr.id}
+                      className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                        ovr.action === 'holiday'
+                          ? 'bg-purple-100/70 border-purple-300 text-purple-900'
+                          : ovr.action === 'cancel'
+                          ? 'bg-rose-100/70 border-rose-300 text-rose-900'
+                          : 'bg-amber-100/70 border-amber-300 text-amber-900'
+                      }`}
                     >
-                      <div>
-                        <div className="font-heading font-black text-slate-900">
-                          {sess.moduleTitle}
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[10px] font-mono font-black uppercase px-2 py-0.5 rounded bg-white/90 border shadow-xs">
+                            {ovr.action === 'holiday'
+                              ? '🌴 Academic / Public Holiday'
+                              : ovr.action === 'cancel'
+                              ? '🛑 Lectures Canceled'
+                              : '⚠️ Lectures Postponed'}
+                          </span>
+                          <span className="font-heading font-black text-xs">{ovr.subject}</span>
+                          <span className="text-[10px] font-mono opacity-80">({ovr.course})</span>
                         </div>
-                        <div className="font-mono text-[11px] text-slate-500">
-                          {sess.moduleCode || 'LEC'} · {sess.sessionType}
-                        </div>
-                      </div>
-
-                      <div>
-                        {sess.status === 'present' ? (
-                          <span className="px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-800 font-mono font-bold">
-                            PRESENT ✓
-                          </span>
-                        ) : sess.status === 'absent' ? (
-                          <span className="px-2.5 py-1 rounded-md bg-rose-100 text-rose-800 font-mono font-bold">
-                            ABSENT ✗
-                          </span>
-                        ) : sess.status === 'excused' ? (
-                          <span className="px-2.5 py-1 rounded-md bg-amber-100 text-amber-800 font-mono font-bold">
-                            EXCUSED
-                          </span>
-                        ) : (
-                          <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700 font-mono font-bold">
-                            PENDING
-                          </span>
+                        {ovr.reason && (
+                          <p className="text-xs font-medium pl-1 text-slate-700">
+                            Note: {ovr.reason}
+                          </p>
                         )}
                       </div>
+
+                      {isAdminOrRep && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveOverride(ovr.id)}
+                          className="self-end sm:self-center px-2.5 py-1 rounded-lg bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 text-xs font-mono font-bold transition-all shadow-xs cursor-pointer flex items-center gap-1"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Revert</span>
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
+
+              {/* Admin Date Override Manager (Shown if Admin or Representative) */}
+              {isAdminOrRep && (
+                <div className="bg-white border border-blue-200 rounded-xl p-3.5 space-y-2.5 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-heading font-black text-xs text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                      <Shield className="w-3.5 h-3.5 text-[#0088FF]" />
+                      <span>Representative / Admin Date Control</span>
+                    </span>
+                    <span className="text-[10px] font-mono text-slate-500">
+                      Syncs to all student calendar profiles
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold text-slate-600 uppercase mb-1">
+                        Status Type
+                      </label>
+                      <select
+                        value={adminDayAction}
+                        onChange={(e) => setAdminDayAction(e.target.value as any)}
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold bg-slate-50"
+                      >
+                        <option value="holiday">🌴 Public / Academic Holiday</option>
+                        <option value="cancel">🛑 All Lectures Canceled</option>
+                        <option value="postpone">⚠️ Lectures Postponed</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold text-slate-600 uppercase mb-1">
+                        Course Scope
+                      </label>
+                      <select
+                        value={adminDayScope}
+                        onChange={(e) => setAdminDayScope(e.target.value as CourseScope)}
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold bg-slate-50"
+                      >
+                        <option value="ALL">All TV Studies (Both Courses)</option>
+                        <option value="TPOPT">TPOPT Only</option>
+                        <option value="TPRPT">TPRPT Only</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold text-slate-600 uppercase mb-1">
+                        Title / Notice
+                      </label>
+                      <input
+                        type="text"
+                        value={adminDayTitle}
+                        onChange={(e) => setAdminDayTitle(e.target.value)}
+                        placeholder={adminDayAction === 'holiday' ? 'e.g. Public Holiday' : 'e.g. All Lectures Canceled'}
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs"
+                      />
+                    </div>
+
+                    <div className="flex items-end">
+                      <button
+                        type="button"
+                        onClick={handleSetAdminDayState}
+                        disabled={isSavingAdminDay}
+                        className="w-full py-1.5 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-mono text-xs font-bold transition-all shadow-xs cursor-pointer"
+                      >
+                        {isSavingAdminDay ? 'Saving...' : 'Set Date State'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Attendance Session Roll-Call Details */}
+              <div className="space-y-2">
+                <span className="font-mono text-[11px] font-bold text-slate-600 uppercase">
+                  Roll-Call Sessions ({selectedDateSessions.length})
+                </span>
+
+                {selectedDateSessions.length === 0 ? (
+                  <p className="text-xs text-slate-500 font-medium py-1">
+                    No attendance session roll-calls recorded on this date.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {selectedDateSessions.map((sess: any, sIdx: number) => (
+                      <div
+                        key={sIdx}
+                        className="bg-white border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-3 text-xs"
+                      >
+                        <div>
+                          <div className="font-heading font-black text-slate-900">
+                            {sess.moduleTitle}
+                          </div>
+                          <div className="font-mono text-[11px] text-slate-500">
+                            {sess.moduleCode || 'LEC'} · {sess.sessionType}
+                          </div>
+                        </div>
+
+                        <div>
+                          {sess.status === 'present' ? (
+                            <span className="px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-800 font-mono font-bold">
+                              PRESENT ✓
+                            </span>
+                          ) : sess.status === 'absent' ? (
+                            <span className="px-2.5 py-1 rounded-md bg-rose-100 text-rose-800 font-mono font-bold">
+                              ABSENT ✗
+                            </span>
+                          ) : sess.status === 'excused' ? (
+                            <span className="px-2.5 py-1 rounded-md bg-amber-100 text-amber-800 font-mono font-bold">
+                              EXCUSED
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700 font-mono font-bold">
+                              PENDING
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
