@@ -97,3 +97,4 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Failed to retrieve active session' }, { status: 500 });
   }
 }
+

@@ -106,3 +106,4 @@ export function generateSessionAttendancePDF(
 
   return doc;
 }
+

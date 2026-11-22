@@ -161,3 +161,4 @@ CREATE TABLE IF NOT EXISTS public.users (
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+

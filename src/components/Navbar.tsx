@@ -8,10 +8,8 @@ import {
   Radio,
   Calendar,
   User,
-  Shield,
   Menu,
   X,
-  LogOut,
 } from 'lucide-react';
 
 export default function Navbar() {
@@ -28,6 +26,8 @@ export default function Navbar() {
       .catch(() => {});
   }, [pathname]);
 
+  // Clean navigation links: Home, Check-in Terminal, Timetables, My Profile / Login
+  // "Admin Suite" is explicitly hidden from public nav bars per requirements
   const navLinks = [
     { href: '/', label: 'Home', icon: Tv },
     { href: '/check-in', label: 'Check-in Terminal', icon: Radio },
@@ -37,9 +37,6 @@ export default function Navbar() {
       label: currentUser ? 'My Profile' : 'Login / Join',
       icon: User,
     },
-    ...(currentUser && (currentUser.role === 'admin' || currentUser.role === 'representative')
-      ? [{ href: '/admin', label: 'Admin Suite', icon: Shield }]
-      : []),
   ];
 
   return (

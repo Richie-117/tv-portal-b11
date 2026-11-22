@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getInvitations, createInvitation, getStudents, getLocalDatabase } from '@/lib/db';
+import {
+  getInvitations,
+  createInvitation,
+  getStudents,
+  getLocalDatabase,
+  revokeUserAccount,
+  revokeInvitation,
+} from '@/lib/db';
 import { generateInviteToken } from '@/lib/auth';
 import { Invitation } from '@/types';
 
@@ -17,16 +24,24 @@ export async function GET() {
     const activatedStudentIds = new Set(
       activeUsers.filter((u) => u.studentId).map((u) => u.studentId)
     );
+    const activatedStudentNumbers = new Set(
+      activeUsers
+        .filter((u) => Boolean(u.studentNumber))
+        .map((u) => (u.studentNumber as string).toUpperCase())
+    );
 
     const studentStatusList = allStudents.map((s) => {
-      const isActivated = activatedStudentIds.has(s.id);
-      const existingInvite = invitations.find(
-        (inv) => inv.studentId === s.id && !inv.isRedeemed
+      const isActivated =
+        activatedStudentIds.has(s.id) ||
+        activatedStudentNumbers.has(s.studentNumber.toUpperCase());
+      const existingInvite = (invitations || []).find(
+        (inv) => (inv.studentId === s.id || inv.studentNumber.toUpperCase() === s.studentNumber.toUpperCase()) && !inv.isRedeemed
       );
       return {
         ...s,
         isActivated,
         hasPendingInvite: Boolean(existingInvite),
+        inviteId: existingInvite?.id || null,
         inviteToken: existingInvite?.tokenClear || null,
         expiresAt: existingInvite?.expiresAt || null,
       };
@@ -79,5 +94,29 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: any) {
     return NextResponse.json({ error: 'Failed to generate invite' }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const action = searchParams.get('action'); // 'revoke_account' or 'revoke_invite'
+    const targetId = searchParams.get('id');
+
+    if (!targetId) {
+      return NextResponse.json({ error: 'Target ID is required' }, { status: 400 });
+    }
+
+    if (action === 'revoke_account') {
+      await revokeUserAccount(targetId);
+      return NextResponse.json({ success: true, message: 'Account revoked successfully' });
+    } else if (action === 'revoke_invite') {
+      await revokeInvitation(targetId);
+      return NextResponse.json({ success: true, message: 'Invitation code revoked successfully' });
+    }
+
+    return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || 'Revocation failed' }, { status: 500 });
   }
 }

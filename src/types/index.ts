@@ -9,6 +9,7 @@ export interface Student {
   indexSuffix: string;   // e.g. "02"
   course: CourseType;
   isActive: boolean;
+  isRepresentative?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -130,5 +131,6 @@ export interface UserAccount {
   email?: string;
   passwordHash?: string;
   isActive: boolean;
+  isRepresentative?: boolean;
   createdAt: string;
 }

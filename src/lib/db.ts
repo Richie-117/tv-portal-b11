@@ -103,6 +103,7 @@ export async function getStudents(): Promise<Student[]> {
           fullName: r.full_name,
           course: r.course,
           isActive: r.is_active,
+          isRepresentative: r.is_representative,
           createdAt: r.created_at,
           updatedAt: r.updated_at,
         }));
@@ -152,6 +153,45 @@ export async function getModules(): Promise<AcademicModule[]> {
   }
   const db = await getLocalDatabase();
   return db.modules || [];
+}
+
+export async function saveAcademicModule(mod: AcademicModule): Promise<AcademicModule> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      await supabase.from('academic_modules').upsert({
+        id: mod.id,
+        code: mod.code,
+        title: mod.title,
+        course_scope: mod.courseScope,
+        stage: mod.stage || 'Foundation',
+        sort_order: mod.sortOrder || 0,
+        is_active: mod.isActive ?? true,
+      });
+    } catch {}
+  }
+  await saveLocalDatabase((db) => {
+    const idx = (db.modules || []).findIndex((m) => m.id === mod.id);
+    if (idx >= 0) db.modules[idx] = mod;
+    else {
+      if (!db.modules) db.modules = [];
+      db.modules.push(mod);
+    }
+  });
+  return mod;
+}
+
+export async function deleteAcademicModule(id: string): Promise<boolean> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      await supabase.from('academic_modules').delete().eq('id', id);
+    } catch {}
+  }
+  await saveLocalDatabase((db) => {
+    db.modules = (db.modules || []).filter((m) => m.id !== id);
+  });
+  return true;
 }
 
 // =============================================================================
@@ -715,4 +755,56 @@ export async function createUserAccount(account: UserAccount): Promise<UserAccou
     db.users.push(account);
   });
   return account;
+}
+
+export async function revokeUserAccount(studentIdOrStudentNumber: string): Promise<boolean> {
+  const clean = studentIdOrStudentNumber.trim().toUpperCase();
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      await supabase.from('users').delete().or(`student_id.eq.${clean},student_number.eq.${clean}`);
+      await supabase.from('invitations').update({ is_redeemed: false, redeemed_by: null, redeemed_at: null }).or(`student_id.eq.${clean},student_number.eq.${clean}`);
+    } catch {}
+  }
+  await saveLocalDatabase((db) => {
+    db.users = (db.users || []).filter(
+      (u) =>
+        u.studentId !== studentIdOrStudentNumber &&
+        (u.studentNumber || '').toUpperCase() !== clean &&
+        u.id !== studentIdOrStudentNumber
+    );
+    // Reset invite so student can be re-invited if needed
+    (db.invitations || []).forEach((inv) => {
+      if (inv.studentId === studentIdOrStudentNumber || inv.studentNumber.toUpperCase() === clean) {
+        inv.isRedeemed = false;
+        inv.redeemedBy = undefined;
+        inv.redeemedAt = undefined;
+      }
+    });
+  });
+  return true;
+}
+
+export async function revokeInvitation(invitationIdOrStudentId: string): Promise<boolean> {
+  const clean = invitationIdOrStudentId.trim();
+  const cleanUpper = clean.toUpperCase();
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      await supabase
+        .from('invitations')
+        .delete()
+        .or(`id.eq.${clean},student_id.eq.${clean},student_number.eq.${cleanUpper}`);
+    } catch {}
+  }
+  await saveLocalDatabase((db) => {
+    db.invitations = (db.invitations || []).filter(
+      (inv) =>
+        inv.id !== clean &&
+        inv.studentId !== clean &&
+        (inv.studentNumber || '').toUpperCase() !== cleanUpper &&
+        (inv.tokenClear || '').toUpperCase() !== cleanUpper
+    );
+  });
+  return true;
 }

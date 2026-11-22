@@ -176,3 +176,4 @@ Execute via Supabase SQL Editor or Supabase CLI:
 ```bash
 supabase db push
 ```
+

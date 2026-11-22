@@ -29,8 +29,7 @@ export default function RootLayout({
           {children}
         </div>
         <footer className="border-t border-slate-200 bg-white/80 py-4 text-center text-xs font-mono text-slate-500">
-          <p>Division of Television Studies · Batch 11 · University College of Ratmalana</p>
-          <p className="text-[10px] text-slate-400 mt-1">Official Academic & Roll-Call Registry</p>
+          Division of Television Studies · Batch 11
         </footer>
       </body>
     </html>

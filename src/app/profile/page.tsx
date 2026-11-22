@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import {
   User,
   Calendar as CalendarIcon,
@@ -14,6 +15,8 @@ import {
   AlertCircle,
   LogOut,
   Info,
+  Shield,
+  ArrowRight,
 } from 'lucide-react';
 import { calculateStudentAttendanceMetrics } from '@/lib/attendanceCalculations';
 
@@ -24,8 +27,8 @@ export default function ProfilePage() {
   const [records, setRecords] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Calendar Month Navigation
-  const [currentDate, setCurrentDate] = useState(() => new Date(2026, 10, 1)); // November 2026 default
+  // Calendar Month Navigation — Locked to start at November 2026
+  const [currentDate, setCurrentDate] = useState(() => new Date(2026, 10, 1)); // November 2026
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
 
   useEffect(() => {
@@ -36,7 +39,10 @@ export default function ProfilePage() {
           router.push('/login');
         } else {
           setCurrentUser(data.user);
-          // Fetch attendance data
+          try {
+            localStorage.setItem('tv_saved_user', JSON.stringify(data.user));
+          } catch {}
+
           Promise.all([
             fetch('/api/admin/broadcast').then((r) => r.json()),
             fetch('/api/admin/attendance').then((r) => r.json()),
@@ -53,12 +59,16 @@ export default function ProfilePage() {
   }, [router]);
 
   const handleLogout = async () => {
+    try {
+      localStorage.removeItem('tv_saved_index');
+      localStorage.removeItem('tv_saved_user');
+    } catch {}
     await fetch('/api/auth/logout', { method: 'POST' });
     router.push('/login');
     router.refresh();
   };
 
-  // Compute metrics for logged in student
+  // Compute metrics for logged-in student
   const studentMetrics = useMemo(() => {
     if (!currentUser) return null;
     return calculateStudentAttendanceMetrics(
@@ -76,10 +86,15 @@ export default function ProfilePage() {
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
+  // Strict Lock: Cannot go back prior to November 2026
+  const isAtMinMonth = year === 2026 && month <= 10;
+
   const prevMonth = () => {
+    if (isAtMinMonth) return;
     setCurrentDate(new Date(year, month - 1, 1));
     setSelectedCalendarDate(null);
   };
+
   const nextMonth = () => {
     setCurrentDate(new Date(year, month + 1, 1));
     setSelectedCalendarDate(null);
@@ -132,6 +147,11 @@ export default function ProfilePage() {
     );
   }
 
+  const isAdminOrRep =
+    currentUser?.role === 'admin' ||
+    currentUser?.role === 'representative' ||
+    currentUser?.isRepresentative;
+
   return (
     <main className="min-h-[calc(100vh-8rem)] cyber-grid px-4 py-6 sm:py-10">
       <div className="max-w-4xl mx-auto space-y-6">
@@ -153,24 +173,36 @@ export default function ProfilePage() {
                   {currentUser.fullName}
                 </h1>
                 <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
-                  ACTIVE
+                  {isAdminOrRep ? 'REPRESENTATIVE / ADMIN' : 'STUDENT ENROLLED'}
                 </span>
               </div>
               <div className="flex items-center gap-2 text-xs font-mono font-bold text-slate-500 pt-0.5">
-                <span className="text-[#0088FF]">{currentUser.studentNumber || 'Student User'}</span>
+                <span className="text-[#0088FF]">{currentUser.studentNumber || currentUser.username}</span>
                 <span>·</span>
                 <span>{currentUser.course || 'Batch 11'}</span>
               </div>
             </div>
           </div>
 
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-50 hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-slate-200 hover:border-rose-200 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer touch-target"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            <span>Sign Out</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {isAdminOrRep && (
+              <Link
+                href="/admin"
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-mono font-bold transition-all active:scale-95 shadow-sm touch-target"
+              >
+                <Shield className="w-3.5 h-3.5 text-[#0088FF]" />
+                <span>Admin Suite</span>
+              </Link>
+            )}
+
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-50 hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-slate-200 hover:border-rose-200 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer touch-target"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Sign Out</span>
+            </button>
+          </div>
         </div>
 
         {/* Metrics Overview Cards */}
@@ -180,7 +212,7 @@ export default function ProfilePage() {
               ATTENDANCE RATE
             </div>
             <div className="font-heading font-black text-2xl text-slate-900">
-              {studentMetrics?.formattedRate || '0%'}
+              {studentMetrics?.formattedRate || 'No attendance data'}
             </div>
             <div className="text-[10px] font-mono text-emerald-600 font-bold">
               Strict Valid Finalized
@@ -224,32 +256,43 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        {/* Monthly Attendance Calendar Visualizer */}
+        {/* Monthly Attendance Calendar Visualizer (Locked to November 2026 onwards) */}
         <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
             <div>
-              <h2 className="font-heading font-black text-lg text-slate-900 tracking-tight">
-                Monthly Attendance Calendar
-              </h2>
+              <div className="flex items-center gap-2">
+                <h2 className="font-heading font-black text-lg text-slate-900 tracking-tight">
+                  Monthly Attendance Calendar
+                </h2>
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-50 text-[#0088FF] border border-blue-200">
+                  Nov 2026 Locked
+                </span>
+              </div>
               <p className="text-xs text-slate-500">
-                Tap any calendar date to view module roll-call records
+                Official attendance tracking begins November 2026. Tap any calendar date to view module records.
               </p>
             </div>
 
             <div className="flex items-center gap-2">
               <button
                 onClick={prevMonth}
-                className="p-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 active:scale-95 transition-all touch-target"
+                disabled={isAtMinMonth}
+                title={isAtMinMonth ? 'Tracking starts November 2026' : 'Previous Month'}
+                className={`p-2 rounded-xl border border-slate-200 transition-all touch-target ${
+                  isAtMinMonth
+                    ? 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-50'
+                    : 'bg-slate-50 hover:bg-slate-100 text-slate-700 active:scale-95 cursor-pointer'
+                }`}
                 aria-label="Previous Month"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <span className="font-mono text-xs font-bold text-slate-800 px-2 min-w-32 text-center">
+              <span className="font-mono text-xs font-bold text-slate-800 px-2 min-w-36 text-center">
                 {monthName}
               </span>
               <button
                 onClick={nextMonth}
-                className="p-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 active:scale-95 transition-all touch-target"
+                className="p-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 active:scale-95 transition-all touch-target cursor-pointer"
                 aria-label="Next Month"
               >
                 <ChevronRight className="w-4 h-4" />

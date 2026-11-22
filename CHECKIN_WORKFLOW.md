@@ -125,3 +125,4 @@
    $$\text{Attendance \%} = \frac{\text{Present}}{\text{Present} + \text{Absent}} \times 100$$
    - `Excused` and `Cancelled` sessions are strictly excluded from the denominator.
    - If denominator is 0, display `"No attendance data"`.
+

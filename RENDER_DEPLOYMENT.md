@@ -65,3 +65,4 @@
 ## 3. Resilient Local & Offline Fallback Engine
 
 If Supabase credentials are not provided (such as in local offline testing), the portal's dual-mode engine automatically routes queries to `data/db.json`. This guarantees 100% operational functionality for local demonstrations, automated end-to-end tests, and network partition resiliency.
+

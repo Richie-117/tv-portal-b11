@@ -77,3 +77,4 @@ export function getSriLankaDateTime(simulatedDate?: Date | string): SriLankaTime
     displayTime,
   };
 }
+

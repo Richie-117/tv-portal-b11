@@ -20,3 +20,4 @@ sql += db.timetableEntries.map(t => `  ('${t.id}', '${t.course}', '${t.dayOfWeek
 fs.mkdirSync('D:/TV-B11/supabase/migrations', { recursive: true });
 fs.writeFileSync('D:/TV-B11/supabase/migrations/003_seed_data.sql', sql, 'utf8');
 console.log('Successfully written D:/TV-B11/supabase/migrations/003_seed_data.sql');
+

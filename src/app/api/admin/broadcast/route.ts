@@ -75,3 +75,4 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: err.message || 'Failed to update session' }, { status: 500 });
   }
 }
+

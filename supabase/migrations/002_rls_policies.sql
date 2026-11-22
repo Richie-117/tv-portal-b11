@@ -69,3 +69,4 @@ CREATE POLICY "Admins have full access to lecture_overrides" ON public.lecture_o
 
 CREATE POLICY "Admins have full access to invitations" ON public.invitations
     FOR ALL TO authenticated USING (true);
+

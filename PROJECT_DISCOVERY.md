@@ -189,3 +189,4 @@ The visual identity is derived directly from the four reference screenshots:
 ## 6. Unresolved Questions & Clarifications
 1. **Cloud Supabase Credentials:** Live database connectivity requires new Supabase project URL and keys. The application is built with complete migration scripts (`.sql`) and a local fallback engine so local development and testing pass immediately.
 2. **Attendance Start Date:** Authorized calculation engine enforces tracking start on `2026-10-25` / `2026-11-16` without penalizing earlier orientation dates.
+

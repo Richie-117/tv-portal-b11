@@ -213,3 +213,4 @@ function evaluateCourseStatus(
     currentTimeStr: timeContext.displayTime,
   };
 }
+

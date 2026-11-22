@@ -1,11 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import {
-  KeyRound,
-  User,
   Lock,
   Sparkles,
   ArrowRight,
@@ -13,6 +10,7 @@ import {
   CheckCircle2,
   Tv,
   Ticket,
+  Hash,
 } from 'lucide-react';
 
 export default function LoginPage() {
@@ -20,18 +18,39 @@ export default function LoginPage() {
   const [tab, setTab] = useState<'login' | 'redeem'>('login');
 
   // Login form state
-  const [username, setUsername] = useState('');
+  const [studentNumber, setStudentNumber] = useState('');
   const [password, setPassword] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
   // Redeem form state
   const [inviteCode, setInviteCode] = useState('');
-  const [redeemUsername, setRedeemUsername] = useState('');
+  const [redeemIndex, setRedeemIndex] = useState('');
   const [redeemPassword, setRedeemPassword] = useState('');
   const [redeemLoading, setRedeemLoading] = useState(false);
   const [redeemError, setRedeemError] = useState<string | null>(null);
   const [redeemSuccess, setRedeemSuccess] = useState<string | null>(null);
+
+  // Auto-restore saved login
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('tv_saved_index');
+      if (saved) setStudentNumber(saved);
+    } catch {}
+
+    fetch('/api/auth/me')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && data.user) {
+          if (data.user.role === 'admin' || data.user.role === 'representative' || data.user.isRepresentative) {
+            router.push('/admin');
+          } else {
+            router.push('/profile');
+          }
+        }
+      })
+      .catch(() => {});
+  }, [router]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,13 +61,22 @@ export default function LoginPage() {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({
+          username: studentNumber.trim().toUpperCase(),
+          password,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
         setLoginError(data.error || 'Authentication failed');
       } else {
-        if (data.user.role === 'admin' || data.user.role === 'representative') {
+        // Save persistent login index in browser
+        try {
+          localStorage.setItem('tv_saved_index', studentNumber.trim().toUpperCase());
+          localStorage.setItem('tv_saved_user', JSON.stringify(data.user));
+        } catch {}
+
+        if (data.user.role === 'admin' || data.user.role === 'representative' || data.user.isRepresentative) {
           router.push('/admin');
         } else {
           router.push('/profile');
@@ -68,13 +96,20 @@ export default function LoginPage() {
     setRedeemSuccess(null);
     setRedeemLoading(true);
 
+    const cleanIndex = redeemIndex.trim().toUpperCase();
+    if (!cleanIndex.startsWith('RT/')) {
+      setRedeemError('Invalid index format. Must begin with RT/TPOPT/26/ or RT/TPRPT/26/');
+      setRedeemLoading(false);
+      return;
+    }
+
     try {
       const res = await fetch('/api/auth/redeem', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           inviteCode: inviteCode.trim().toUpperCase(),
-          username: redeemUsername.trim().toLowerCase(),
+          studentNumber: cleanIndex,
           password: redeemPassword,
         }),
       });
@@ -82,9 +117,18 @@ export default function LoginPage() {
       if (!res.ok) {
         setRedeemError(data.error || 'Failed to activate account');
       } else {
-        setRedeemSuccess('Account successfully activated! Redirecting...');
+        setRedeemSuccess('Account successfully activated! Logging in...');
+        try {
+          localStorage.setItem('tv_saved_index', cleanIndex);
+          localStorage.setItem('tv_saved_user', JSON.stringify(data.user));
+        } catch {}
+
         setTimeout(() => {
-          router.push('/profile');
+          if (data.user?.isRepresentative || data.user?.role === 'admin') {
+            router.push('/admin');
+          } else {
+            router.push('/profile');
+          }
           router.refresh();
         }, 1200);
       }
@@ -148,10 +192,10 @@ export default function LoginPage() {
             <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-1">
                 <h2 className="font-heading font-black text-lg text-slate-900 tracking-tight">
-                  Account Sign In
+                  Student Sign In
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Enter your student or administrator credentials
+                  Enter your full student index number and password
                 </p>
               </div>
 
@@ -164,19 +208,19 @@ export default function LoginPage() {
 
               <div className="space-y-1.5">
                 <label className="block text-xs font-mono font-bold text-slate-700 uppercase">
-                  Username
+                  Student Index Number
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                    <User className="w-4 h-4" />
+                    <Hash className="w-4 h-4" />
                   </div>
                   <input
                     type="text"
                     required
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder="e.g. hesansamudika"
-                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-300 text-sm focus:outline-none focus:border-[#0088FF] focus:ring-2 focus:ring-[#0088FF]/20"
+                    value={studentNumber}
+                    onChange={(e) => setStudentNumber(e.target.value.toUpperCase())}
+                    placeholder="e.g. RT/TPOPT/26/02 or tvadminb11"
+                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-300 font-mono text-sm uppercase tracking-wide focus:outline-none focus:border-[#0088FF] focus:ring-2 focus:ring-[#0088FF]/20"
                   />
                 </div>
               </div>
@@ -217,7 +261,7 @@ export default function LoginPage() {
                   Activate Student Account
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Enter the one-time invite code provided by your batch representative
+                  Enter your one-time code and full index number to bind your record
                 </p>
               </div>
 
@@ -256,30 +300,40 @@ export default function LoginPage() {
 
               <div className="space-y-1.5">
                 <label className="block text-xs font-mono font-bold text-slate-700 uppercase">
-                  Choose Username
+                  Full Student Index Number
                 </label>
-                <input
-                  type="text"
-                  required
-                  value={redeemUsername}
-                  onChange={(e) => setRedeemUsername(e.target.value)}
-                  placeholder="e.g. hesansamudika"
-                  className="w-full px-4 py-3 rounded-2xl border border-slate-300 text-sm focus:outline-none focus:border-[#0088FF] focus:ring-2 focus:ring-[#0088FF]/20"
-                />
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <Hash className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    value={redeemIndex}
+                    onChange={(e) => setRedeemIndex(e.target.value.toUpperCase())}
+                    placeholder="RT/TPOPT/26/02 or RT/TPRPT/26/01"
+                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-300 font-mono text-sm uppercase tracking-wide focus:outline-none focus:border-[#0088FF] focus:ring-2 focus:ring-[#0088FF]/20"
+                  />
+                </div>
               </div>
 
               <div className="space-y-1.5">
                 <label className="block text-xs font-mono font-bold text-slate-700 uppercase">
                   Set Secure Password
                 </label>
-                <input
-                  type="password"
-                  required
-                  value={redeemPassword}
-                  onChange={(e) => setRedeemPassword(e.target.value)}
-                  placeholder="At least 6 characters"
-                  className="w-full px-4 py-3 rounded-2xl border border-slate-300 text-sm focus:outline-none focus:border-[#0088FF] focus:ring-2 focus:ring-[#0088FF]/20"
-                />
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="password"
+                    required
+                    value={redeemPassword}
+                    onChange={(e) => setRedeemPassword(e.target.value)}
+                    placeholder="At least 6 characters"
+                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-300 text-sm focus:outline-none focus:border-[#0088FF] focus:ring-2 focus:ring-[#0088FF]/20"
+                  />
+                </div>
               </div>
 
               <button
