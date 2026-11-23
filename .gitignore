@@ -43,3 +43,8 @@ Thumbs.db
 /exports/*.pdf
 /backups/
 
+# Documentation and README files (never pushed to remote)
+*.md
+*README*
+*readme*
+
