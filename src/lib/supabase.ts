@@ -16,6 +16,13 @@ export function getSupabaseClient(): SupabaseClient | null {
   if (!cachedClient) {
     cachedClient = createClient(supabaseUrl, supabaseAnonKey || supabaseServiceKey, {
       auth: { persistSession: false },
+      global: {
+        fetch: (url, options) =>
+          fetch(url, {
+            ...options,
+            cache: 'no-store',
+          }),
+      },
     });
   }
   return cachedClient;
@@ -26,6 +33,13 @@ export function getSupabaseAdmin(): SupabaseClient | null {
   if (!cachedAdmin) {
     cachedAdmin = createClient(supabaseUrl, supabaseServiceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
+      global: {
+        fetch: (url, options) =>
+          fetch(url, {
+            ...options,
+            cache: 'no-store',
+          }),
+      },
     });
   }
   return cachedAdmin;

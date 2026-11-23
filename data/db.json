@@ -2384,27 +2384,7 @@
       "createdAt": "2026-11-22T19:29:31.394Z"
     }
   ],
-  "checkinSessions": [
-    {
-      "id": "sess-1795371148347",
-      "course": "ALL",
-      "moduleId": "sub-english",
-      "moduleCode": "ENGLISH",
-      "moduleTitle": "English",
-      "sessionType": "lecture",
-      "date": "2026-11-22",
-      "startTime": "08:30",
-      "endTime": "16:30",
-      "checkinStatus": "active",
-      "sessionStatus": "active",
-      "checkinWindowMinutes": 60,
-      "checkinOpenedAt": "2026-11-22T18:12:28.347Z",
-      "checkinExpiresAt": "2026-11-22T19:12:28.347Z",
-      "notes": "",
-      "createdBy": "Administrator",
-      "createdAt": "2026-11-22T18:12:28.347Z"
-    }
-  ],
+  "checkinSessions": [],
   "attendanceRecords": [
     {
       "id": "rec-1795366571636-4b2fu",

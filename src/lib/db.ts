@@ -355,7 +355,7 @@ export async function getCheckinSessions(): Promise<CheckinSession[]> {
     try {
       const { data, error } = await supabase.from('checkin_sessions').select('*').order('created_at', { ascending: false });
       if (!error && data) {
-        return data.map((r: any) => ({
+        const mapped = data.map((r: any) => ({
           id: r.id,
           course: r.course,
           moduleId: r.module_id,
@@ -375,6 +375,11 @@ export async function getCheckinSessions(): Promise<CheckinSession[]> {
           createdAt: r.created_at,
           updatedAt: r.updated_at,
         }));
+        // Synchronize local database to prevent stale orphaned deleted sessions
+        saveLocalDatabase((db) => {
+          db.checkinSessions = mapped;
+        }).catch(() => {});
+        return mapped;
       }
     } catch {}
   }
@@ -476,6 +481,23 @@ export async function deleteCheckinSession(id: string): Promise<boolean> {
     db.checkinSessions = (db.checkinSessions || []).filter((s) => s.id !== id);
     db.attendanceRecords = (db.attendanceRecords || []).filter((r) => r.sessionId !== id);
     db.attendanceCheckins = (db.attendanceCheckins || []).filter((c) => c.sessionId !== id);
+  });
+  return true;
+}
+
+export async function deleteAllCheckinSessions(): Promise<boolean> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      await supabase.from('attendance_checkins').delete().neq('id', 'placeholder');
+      await supabase.from('attendance_records').delete().neq('id', 'placeholder');
+      await supabase.from('checkin_sessions').delete().neq('id', 'placeholder');
+    } catch {}
+  }
+  await saveLocalDatabase((db) => {
+    db.checkinSessions = [];
+    db.attendanceRecords = [];
+    db.attendanceCheckins = [];
   });
   return true;
 }

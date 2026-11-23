@@ -5,10 +5,13 @@ import {
   updateCheckinSessionStatus,
   getCheckinSessionById,
   deleteCheckinSession,
+  deleteAllCheckinSessions,
 } from '@/lib/db';
 import { CheckinSession } from '@/types';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 
 export async function GET() {
   try {
@@ -102,6 +105,11 @@ export async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const sessionId = searchParams.get('sessionId') || searchParams.get('id');
+
+    if (sessionId === 'all') {
+      await deleteAllCheckinSessions();
+      return NextResponse.json({ success: true, message: 'All broadcast sessions cleared successfully' });
+    }
 
     if (!sessionId) {
       return NextResponse.json({ error: 'Session ID is required' }, { status: 400 });

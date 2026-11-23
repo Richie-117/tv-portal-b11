@@ -662,7 +662,7 @@ export default function ProfilePage() {
                             {sess.moduleTitle}
                           </div>
                           <div className="font-mono text-[11px] text-slate-500">
-                            {sess.moduleCode || 'LEC'} · {sess.sessionType}
+                            {sess.startTime && sess.endTime ? `${sess.startTime} – ${sess.endTime} · ` : ''}{sess.moduleCode || 'LEC'} · {sess.sessionType}
                           </div>
                         </div>
 

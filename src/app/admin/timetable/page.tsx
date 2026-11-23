@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import {
   Calendar,
@@ -19,6 +19,15 @@ import {
   X,
 } from 'lucide-react';
 import { DayOfWeek, CourseScope, TimetableSlot, TimetableOverride, AcademicModule } from '@/types';
+import {
+  isAcademicLecture,
+  isStudyOrEmptySlot,
+  mergeTimetableSlots,
+  normalizeSubject,
+  MergedTimetableSlot,
+  getCurrentWeekDates,
+  findMatchingOverride,
+} from '@/lib/timetableSlotUtils';
 
 const DAYS: { full: DayOfWeek; short: string }[] = [
   { full: 'Monday', short: 'Mon' },
@@ -36,6 +45,7 @@ export default function AdminTimetablePage() {
   const [slots, setSlots] = useState<TimetableSlot[]>([]);
   const [modules, setModules] = useState<AcademicModule[]>([]);
   const [overrides, setOverrides] = useState<TimetableOverride[]>([]);
+  const [editorViewMode, setEditorViewMode] = useState<'combined' | 'hourly'>('combined');
   const [loading, setLoading] = useState(true);
 
   // New Slot Form Modal
@@ -45,7 +55,7 @@ export default function AdminTimetablePage() {
   const [slotEndTime, setSlotEndTime] = useState('09:30');
   const [slotSubject, setSlotSubject] = useState('');
   const [slotGroup, setSlotGroup] = useState('A/L & NVQ Students');
-  const [slotType, setSlotType] = useState<'class' | 'break' | 'lunch'>('class');
+  const [slotType, setSlotType] = useState<'class' | 'break' | 'lunch' | 'empty'>('class');
 
   // New Module Modal
   const [showModuleModal, setShowModuleModal] = useState(false);
@@ -106,8 +116,36 @@ export default function AdminTimetablePage() {
 
   useEffect(() => {
     fetchTimetableData();
-    const interval = setInterval(fetchTimetableData, 10000);
-    return () => clearInterval(interval);
+
+    // Local Colombo clock updater every 30s (eliminates console API flood)
+    const timer = setInterval(() => {
+      try {
+        const now = new Date();
+        const colomboFormatter = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'Asia/Colombo',
+          hour: 'numeric',
+          minute: 'numeric',
+          hour12: true,
+        });
+        const hourFormatter = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'Asia/Colombo',
+          hour: 'numeric',
+          minute: 'numeric',
+          hour12: false,
+        });
+        const parts = hourFormatter.formatToParts(now);
+        let h = 0;
+        let m = 0;
+        for (const p of parts) {
+          if (p.type === 'hour') h = parseInt(p.value, 10);
+          if (p.type === 'minute') m = parseInt(p.value, 10);
+        }
+        setCurrentMinutesNow(h * 60 + m);
+        setCurrentTimeStr(colomboFormatter.format(now));
+      } catch {}
+    }, 30000);
+
+    return () => clearInterval(timer);
   }, []);
 
   const openAddSlotModal = () => {
@@ -169,9 +207,16 @@ export default function AdminTimetablePage() {
     }
   };
 
-  const handleDeleteSlot = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this timetable slot?')) return;
-    await fetch(`/api/timetable/entries?id=${id}`, { method: 'DELETE' });
+  const handleDeleteSlot = async (id: string, slotIds?: string[]) => {
+    const ids = slotIds && slotIds.length > 0 ? slotIds : [id];
+    const msg =
+      ids.length > 1
+        ? `Delete this combined session and all its ${ids.length} hourly entries from the timetable?`
+        : 'Are you sure you want to delete this timetable slot?';
+    if (!confirm(msg)) return;
+    for (const sId of ids) {
+      await fetch(`/api/timetable/entries?id=${sId}`, { method: 'DELETE' });
+    }
     await fetchTimetableData();
   };
 
@@ -222,6 +267,15 @@ export default function AdminTimetablePage() {
     if (!val) {
       setOverrideSubject('');
       setOverrideSlotId('');
+      return;
+    }
+    if (val.startsWith('merged:')) {
+      const parts = val.split(':');
+      // Format: "merged:SUBJECT:SLOTID"
+      const subj = parts[1];
+      const slotId = parts[2] || '';
+      setOverrideSubject(subj);
+      setOverrideSlotId(slotId);
       return;
     }
     if (val.startsWith('slot:')) {
@@ -302,19 +356,44 @@ export default function AdminTimetablePage() {
   };
 
   const overrideDayOfWeek = getDayOfWeekFromDate(overrideDate);
+  const scheduledMergedOnOverrideDay = useMemo(() => {
+    const dayRaw = slots.filter(
+      (s) =>
+        (s.course === overrideScope || overrideScope === 'ALL' || s.course === 'ALL') &&
+        s.dayOfWeek.toLowerCase() === overrideDayOfWeek.toLowerCase()
+    );
+    return mergeTimetableSlots(dayRaw).filter(isAcademicLecture);
+  }, [slots, overrideScope, overrideDayOfWeek]);
+
   const scheduledSlotsOnOverrideDay = slots.filter(
     (s) =>
       (s.course === overrideScope || overrideScope === 'ALL' || s.course === 'ALL') &&
       s.dayOfWeek.toLowerCase() === overrideDayOfWeek.toLowerCase() &&
-      s.slotType === 'class' &&
-      s.subject &&
-      s.subject !== 'Break' &&
-      s.subject !== 'Lunch Break'
+      isAcademicLecture(s)
   );
 
   const daySlots = slots.filter(
     (s) => (s.course === selectedCourse || s.course === 'ALL') && s.dayOfWeek.toLowerCase() === selectedDay.toLowerCase()
   );
+
+  const combinedDaySlots = useMemo(() => mergeTimetableSlots(daySlots), [daySlots]);
+  const activeSlotsToDisplay = editorViewMode === 'combined' ? combinedDaySlots : daySlots;
+
+  const weekDates = useMemo(() => getCurrentWeekDates(), []);
+  const selectedDayDate = weekDates[selectedDay] || '';
+
+  const dayWideOverride = useMemo(() => {
+    return overrides.find(
+      (o) =>
+        o.date === selectedDayDate &&
+        (o.course === selectedCourse || o.course === 'ALL') &&
+        (o.action === 'holiday' ||
+          (!o.slotId &&
+            (normalizeSubject(o.subject).includes('postpone') ||
+              normalizeSubject(o.subject).includes('cancel') ||
+              normalizeSubject(o.subject).includes('all'))))
+    );
+  }, [overrides, selectedDayDate, selectedCourse]);
 
   return (
     <main className="min-h-[calc(100vh-8rem)] cyber-grid px-4 py-6 sm:py-10">
@@ -409,12 +488,75 @@ export default function AdminTimetablePage() {
             ))}
           </div>
 
+          {/* Editor Mode Control Bar: Combined Sessions vs Released Hourly Breakdown */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100">
+            <div className="text-xs font-mono text-slate-500">
+              Schedule for <span className="font-bold text-slate-800">{selectedDay}</span> ({activeSlotsToDisplay.length} {editorViewMode === 'combined' ? 'Sessions' : 'Hourly Slots'})
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="inline-flex items-center p-1 rounded-xl bg-slate-100 border border-slate-200 text-xs font-mono">
+                <button
+                  type="button"
+                  onClick={() => setEditorViewMode('combined')}
+                  className={`px-3 py-1 rounded-lg font-bold transition-all ${
+                    editorViewMode === 'combined'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  🔀 Combined Sessions View
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditorViewMode('hourly')}
+                  className={`px-3 py-1 rounded-lg font-bold transition-all ${
+                    editorViewMode === 'hourly'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  📋 Hourly Breakdown (Released)
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Day-wide Override Banner for Editor */}
+          {dayWideOverride && (
+            <div
+              className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 text-xs font-mono font-bold shadow-xs ${
+                dayWideOverride.action === 'holiday'
+                  ? 'bg-purple-50/90 border-purple-300 text-purple-900'
+                  : dayWideOverride.action === 'cancel'
+                  ? 'bg-rose-50/90 border-rose-300 text-rose-900'
+                  : 'bg-amber-50/90 border-amber-300 text-amber-900'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>
+                  {dayWideOverride.action === 'holiday'
+                    ? '🌴 Academic / Public Holiday'
+                    : dayWideOverride.action === 'cancel'
+                    ? '🛑 All Lectures Canceled'
+                    : '⚠️ Lectures Postponed'}{' '}
+                  on {selectedDay} ({selectedDayDate}): {dayWideOverride.subject}
+                  {dayWideOverride.reason ? ` · ${dayWideOverride.reason}` : ''}
+                </span>
+              </div>
+              <span className="px-2 py-0.5 rounded bg-white/80 border text-[10px] uppercase font-black">
+                {dayWideOverride.action}
+              </span>
+            </div>
+          )}
+
           {/* Slots List with Edit & Delete Actions */}
           {loading ? (
             <div className="py-10 text-center text-slate-400 font-mono text-xs animate-pulse">
               Loading slots matrix...
             </div>
-          ) : daySlots.length === 0 ? (
+          ) : activeSlotsToDisplay.length === 0 ? (
             <div className="text-center py-10 space-y-2">
               <p className="font-heading font-bold text-sm text-slate-700">
                 No slots configured for {selectedDay}
@@ -425,45 +567,99 @@ export default function AdminTimetablePage() {
             </div>
           ) : (
             <div className="space-y-2.5">
-              {daySlots.map((s) => {
+              {activeSlotsToDisplay.map((s: any) => {
                 const startMin = parseTimeToMinutes(s.startTime);
                 const endMin = parseTimeToMinutes(s.endTime);
                 const isToday = todayDayOfWeek.toLowerCase() === selectedDay.toLowerCase();
                 const isOngoing = isToday && currentMinutesNow >= startMin && currentMinutesNow < endMin;
+
+                const slotOverride = findMatchingOverride(
+                  s,
+                  overrides,
+                  selectedDayDate,
+                  selectedCourse
+                );
+
+                const isCancelled = slotOverride?.action === 'cancel';
+                const isPostponed = slotOverride?.action === 'postpone';
+                const isHoliday = slotOverride?.action === 'holiday';
                 const isLunch = s.slotType === 'lunch';
                 const isBreak = s.slotType === 'break';
-                const isClass = s.slotType === 'class' || (!isLunch && !isBreak);
+                const isStudyOrEmpty = isStudyOrEmptySlot(s);
+                const isClass = isAcademicLecture(s);
 
                 let containerStyle = 'border-slate-200 hover:border-blue-300 bg-white';
                 let timeBadgeStyle = 'bg-slate-100 text-slate-800';
+                let subjectStyle = 'text-slate-900';
 
-                if (isOngoing && isClass) {
+                if (isCancelled) {
+                  containerStyle =
+                    'bg-rose-50/90 border-2 border-rose-400 text-rose-950 shadow-md shadow-rose-500/10';
+                  timeBadgeStyle = 'bg-rose-600 text-white font-black';
+                  subjectStyle = 'line-through text-rose-700 font-black';
+                } else if (isPostponed) {
+                  containerStyle =
+                    'bg-amber-50/90 border-2 border-amber-400 text-amber-950 shadow-md shadow-amber-500/10';
+                  timeBadgeStyle = 'bg-amber-500 text-amber-950 font-black';
+                  subjectStyle = 'text-amber-950 font-black';
+                } else if (isHoliday) {
+                  containerStyle =
+                    'bg-purple-50/90 border-2 border-purple-400 text-purple-950 shadow-md shadow-purple-500/10';
+                  timeBadgeStyle = 'bg-purple-600 text-white font-black';
+                  subjectStyle = 'text-purple-950 font-black';
+                } else if (isOngoing && isClass) {
                   containerStyle =
                     'bg-emerald-50/80 border-2 border-emerald-500 ring-2 ring-emerald-500/25 shadow-md shadow-emerald-500/10';
                   timeBadgeStyle = 'bg-emerald-600 text-white font-black';
+                  subjectStyle = 'text-emerald-950 font-black';
                 } else if (isOngoing && isLunch) {
                   containerStyle =
                     'bg-amber-50 border-2 border-amber-400 ring-2 ring-amber-400/25 shadow-md shadow-amber-400/10';
                   timeBadgeStyle = 'bg-amber-400 text-amber-950 font-black';
+                  subjectStyle = 'text-amber-950 font-black';
                 } else if (isLunch) {
                   containerStyle = 'bg-amber-50/40 border border-amber-200/80 hover:border-amber-300';
                   timeBadgeStyle = 'bg-amber-100 text-amber-900 font-bold';
+                  subjectStyle = 'text-amber-950 font-bold';
+                } else if (isStudyOrEmpty) {
+                  containerStyle = isOngoing
+                    ? 'bg-slate-50 border-2 border-slate-300'
+                    : 'bg-slate-50/60 border border-slate-200 hover:border-slate-300';
+                  timeBadgeStyle = 'bg-slate-100 text-slate-600 font-medium';
+                  subjectStyle = 'text-slate-700 font-bold';
                 } else if (isBreak) {
                   containerStyle = 'bg-slate-50/60 border border-slate-200 hover:border-slate-300';
                   timeBadgeStyle = 'bg-slate-100 text-slate-700';
+                  subjectStyle = 'text-slate-700 font-bold';
                 }
 
                 return (
                   <div
                     key={s.id}
-                    className={`rounded-2xl p-4 flex items-center justify-between gap-4 transition-all ${containerStyle}`}
+                    className={`rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-all ${containerStyle}`}
                   >
                     <div className="flex items-center gap-3">
                       <div className="flex flex-col items-start gap-1">
                         <span className={`font-mono text-xs font-bold px-2.5 py-1 rounded-lg whitespace-nowrap ${timeBadgeStyle}`}>
                           {s.startTime} – {s.endTime}
                         </span>
-                        {isOngoing && isClass && (
+
+                        {isCancelled && (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-black uppercase bg-rose-600 text-white shadow-xs">
+                            CANCELLED: {slotOverride?.subject || 'CANCELLED'}
+                          </span>
+                        )}
+                        {isPostponed && (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-black uppercase bg-amber-500 text-amber-950 shadow-xs">
+                            POSTPONED: {slotOverride?.subject || 'POSTPONED'}
+                          </span>
+                        )}
+                        {isHoliday && (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-black uppercase bg-purple-600 text-white shadow-xs">
+                            HOLIDAY
+                          </span>
+                        )}
+                        {isOngoing && isClass && !isCancelled && !isPostponed && (
                           <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-black uppercase bg-emerald-600 text-white animate-pulse">
                             LIVE NOW
                           </span>
@@ -473,32 +669,62 @@ export default function AdminTimetablePage() {
                             LUNCH NOW
                           </span>
                         )}
+                        {isOngoing && isStudyOrEmpty && (
+                          <span className="px-2 py-0.5 rounded text-[9px] font-mono font-bold uppercase bg-slate-200 text-slate-700">
+                            STUDY INTERVAL
+                          </span>
+                        )}
+                        {s.isMerged && (
+                          <span className="px-2 py-0.5 rounded text-[9px] font-mono font-bold bg-blue-50 text-[#0088FF] border border-blue-200">
+                            {s.subSlotCount} Hours Combined
+                          </span>
+                        )}
                       </div>
+
                       <div>
-                        <div className={`font-heading font-black text-sm ${isOngoing && isClass ? 'text-emerald-950' : isLunch ? 'text-amber-950' : 'text-slate-900'}`}>
-                          {s.subject || (s.slotType === 'lunch' ? 'Lunch Break' : s.slotType === 'break' ? 'Break' : 'Empty Slot')}
+                        <div className={`font-heading font-black text-sm ${subjectStyle}`}>
+                          {s.subject || (s.slotType === 'lunch' ? 'Lunch Break' : s.slotType === 'break' ? 'Break' : 'Practical / Study Period')}
                         </div>
                         <div className={`font-mono text-[11px] ${isOngoing && isClass ? 'text-emerald-700 font-semibold' : 'text-slate-500'}`}>
-                          {s.course === 'ALL' ? 'Common Module' : s.course} · {s.slotType} · {s.studentGroup || 'All'}
+                          {s.course === 'ALL' ? 'Common Module' : s.course} · {isStudyOrEmpty ? 'Practical / Study' : s.slotType} · {s.studentGroup || 'All'}
                         </div>
+                        {s.breaksIncluded && s.breaksIncluded.length > 0 && (
+                          <div className="text-[10px] font-mono text-blue-600 font-semibold mt-0.5">
+                            Includes {s.breaksIncluded[0].label} ({s.breaksIncluded[0].startTime} – {s.breaksIncluded[0].endTime})
+                          </div>
+                        )}
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 self-end sm:self-center">
+                      {/* Release combined session into hourly slots button */}
+                      {s.isMerged && (
+                        <button
+                          type="button"
+                          onClick={() => setEditorViewMode('hourly')}
+                          className="px-2.5 py-1 text-[11px] font-mono font-bold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                          title="Release this combined block into separate hourly slots"
+                        >
+                          <span>Release Hourly</span>
+                        </button>
+                      )}
+
                       {/* Edit Button */}
                       <button
-                        onClick={() => openEditSlotModal(s)}
-                        className="p-2 text-slate-500 hover:text-[#0088FF] rounded-lg hover:bg-blue-50 transition-colors"
-                        title="Edit slot"
+                        type="button"
+                        onClick={() => openEditSlotModal(s.rawSlots ? s.rawSlots[0] : s)}
+                        className="p-2 text-slate-500 hover:text-[#0088FF] rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
+                        title={s.isMerged ? 'Edit base slot' : 'Edit slot'}
                       >
                         <Pencil className="w-4 h-4" />
                       </button>
 
                       {/* Delete Button */}
                       <button
-                        onClick={() => handleDeleteSlot(s.id)}
-                        className="p-2 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
-                        title="Delete slot"
+                        type="button"
+                        onClick={() => handleDeleteSlot(s.id, s.slotIds)}
+                        className="p-2 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                        title={s.isMerged ? 'Delete combined session' : 'Delete slot'}
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -581,7 +807,7 @@ export default function AdminTimetablePage() {
                   Selective Subject / Module
                 </label>
                 <span className="text-[10px] font-mono text-slate-500">
-                  {overrideDayOfWeek} · {scheduledSlotsOnOverrideDay.length} lecture slot(s) scheduled
+                  {overrideDayOfWeek} · {scheduledMergedOnOverrideDay.length} scheduled lecture session(s)
                 </span>
               </div>
               <select
@@ -591,12 +817,12 @@ export default function AdminTimetablePage() {
               >
                 <option value="">-- Choose Module or Scheduled Lecture --</option>
                 
-                {/* 1. Scheduled lectures on that specific day */}
-                {scheduledSlotsOnOverrideDay.length > 0 && (
+                {/* 1. Scheduled lectures on that specific day (Merged continuous sessions) */}
+                {scheduledMergedOnOverrideDay.length > 0 && (
                   <optgroup label={`📅 Scheduled Lectures on ${overrideDayOfWeek} (${overrideDate})`}>
-                    {scheduledSlotsOnOverrideDay.map((s) => (
-                      <option key={s.id} value={`slot:${s.id}`}>
-                        ⭐ {s.startTime} - {s.endTime} : {s.subject} ({s.course} · {s.studentGroup || 'All'})
+                    {scheduledMergedOnOverrideDay.map((m) => (
+                      <option key={m.id} value={`merged:${m.subject}:${m.id}`}>
+                        ⭐ {m.subject} ({m.startTime} – {m.endTime}){m.isMerged ? ` · ${m.subSlotCount}hr Block` : ''} ({m.course})
                       </option>
                     ))}
                   </optgroup>
@@ -774,6 +1000,7 @@ export default function AdminTimetablePage() {
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold"
                 >
                   <option value="class">Class / Academic Lecture</option>
+                  <option value="empty">Practical / Self-Study Period</option>
                   <option value="break">Interval / Short Break</option>
                   <option value="lunch">Lunch Break</option>
                 </select>

@@ -1,19 +1,30 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Calendar,
   Clock,
   Layers,
   Sparkles,
   AlertCircle,
-  XCircle,
   Coffee,
   Utensils,
   BookOpen,
   RefreshCw,
+  Sliders,
+  CheckCircle2,
 } from 'lucide-react';
 import { CourseScope, DayOfWeek, TimetableSlot, TimetableOverride } from '@/types';
+import {
+  mergeTimetableSlots,
+  isAcademicLecture,
+  isStudyOrEmptySlot,
+  parseTimeToMinutes,
+  MergedTimetableSlot,
+  getCurrentWeekDates,
+  findMatchingOverride,
+  normalizeSubject,
+} from '@/lib/timetableSlotUtils';
 
 const DAYS: { full: DayOfWeek; short: string }[] = [
   { full: 'Monday', short: 'Mon' },
@@ -28,33 +39,44 @@ const DAYS: { full: DayOfWeek; short: string }[] = [
 export default function TimetablePage() {
   const [selectedCourse, setSelectedCourse] = useState<'TPOPT' | 'TPRPT'>('TPOPT');
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>('Monday');
+  const [viewMode, setViewMode] = useState<'combined' | 'detailed'>('combined');
   const [slots, setSlots] = useState<TimetableSlot[]>([]);
   const [overrides, setOverrides] = useState<TimetableOverride[]>([]);
   const [currentTimeStr, setCurrentTimeStr] = useState<string>('');
   const [currentMinutesNow, setCurrentMinutesNow] = useState<number>(0);
   const [todayDayOfWeek, setTodayDayOfWeek] = useState<string>('');
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const fetchTimetableData = async () => {
+  // Guard: Once the user explicitly picks a day, never involuntarily jump back to today
+  const userHasSelectedDayRef = useRef<boolean>(false);
+
+  const fetchTimetableData = async (isManual = false) => {
+    if (isManual) setIsRefreshing(true);
     try {
-      const [entriesRes, liveRes] = await Promise.all([
-        fetch('/api/timetable/entries'),
-        fetch('/api/timetable/live'),
+      const [entriesRes, liveRes, overRes] = await Promise.all([
+        fetch('/api/timetable/entries', { cache: 'no-store' }),
+        fetch('/api/timetable/live', { cache: 'no-store' }),
+        fetch('/api/timetable/override', { cache: 'no-store' }),
       ]);
 
       const entriesData = await entriesRes.json();
       const liveData = await liveRes.json();
+      const overData = await overRes.json();
 
       if (entriesData.success) {
         setSlots(entriesData.entries || []);
+      }
+      if (overData.success) {
+        setOverrides(overData.overrides || []);
       }
       if (liveData.success) {
         setCurrentTimeStr(liveData.timeContext?.displayTime || '');
         setCurrentMinutesNow(liveData.timeContext?.minutesNow || 0);
         setTodayDayOfWeek(liveData.timeContext?.dayOfWeek || 'Monday');
-        setOverrides(liveData.overridesToday || []);
 
-        if (loading && liveData.timeContext?.dayOfWeek) {
+        // Only select today on initial mount if user hasn't browsed another day
+        if (!userHasSelectedDayRef.current && liveData.timeContext?.dayOfWeek) {
           setSelectedDay(liveData.timeContext.dayOfWeek as DayOfWeek);
         }
       }
@@ -62,17 +84,46 @@ export default function TimetablePage() {
       console.error('Failed to load timetable:', err);
     } finally {
       setLoading(false);
+      if (isManual) setTimeout(() => setIsRefreshing(false), 300);
     }
   };
 
   useEffect(() => {
     fetchTimetableData();
-    const interval = setInterval(fetchTimetableData, 10000);
-    return () => clearInterval(interval);
+
+    // Local clock update every 30 seconds (no heavy API polling needed)
+    const timer = setInterval(() => {
+      try {
+        const now = new Date();
+        const colomboFormatter = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'Asia/Colombo',
+          hour: 'numeric',
+          minute: 'numeric',
+          hour12: true,
+        });
+        const hourFormatter = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'Asia/Colombo',
+          hour: 'numeric',
+          minute: 'numeric',
+          hour12: false,
+        });
+        const parts = hourFormatter.formatToParts(now);
+        let h = 0;
+        let m = 0;
+        for (const p of parts) {
+          if (p.type === 'hour') h = parseInt(p.value, 10);
+          if (p.type === 'minute') m = parseInt(p.value, 10);
+        }
+        setCurrentMinutesNow(h * 60 + m);
+        setCurrentTimeStr(colomboFormatter.format(now));
+      } catch {}
+    }, 30000);
+
+    return () => clearInterval(timer);
   }, []);
 
-  // Filter slots for selected course and day
-  const displayedSlots = useMemo(() => {
+  // Filter raw slots for selected course and day
+  const displayedRawSlots = useMemo(() => {
     return slots
       .filter(
         (s) =>
@@ -82,10 +133,33 @@ export default function TimetablePage() {
       .sort((a, b) => a.sortOrder - b.sortOrder);
   }, [slots, selectedCourse, selectedDay]);
 
-  const parseTimeToMinutes = (t: string) => {
-    if (!t) return 0;
-    const [h, m] = t.split(':').map(Number);
-    return (h || 0) * 60 + (m || 0);
+  // Combined merged sessions (e.g. English 10:40–12:40, Gaffer 08:30–12:40, DM10 13:20–16:30)
+  const mergedSessions = useMemo(() => {
+    return mergeTimetableSlots(displayedRawSlots);
+  }, [displayedRawSlots]);
+
+  const weekDates = useMemo(() => getCurrentWeekDates(), []);
+  const selectedDayDate = weekDates[selectedDay] || '';
+
+  // Check if there is an active day-wide override for the selected date
+  const dayWideOverride = useMemo(() => {
+    return overrides.find(
+      (o) =>
+        o.date === selectedDayDate &&
+        (o.course === selectedCourse || o.course === 'ALL') &&
+        (o.action === 'holiday' ||
+          (!o.slotId &&
+            (normalizeSubject(o.subject).includes('postpone') ||
+              normalizeSubject(o.subject).includes('cancel') ||
+              normalizeSubject(o.subject).includes('all'))))
+    );
+  }, [overrides, selectedDayDate, selectedCourse]);
+
+  const activeDisplayList = viewMode === 'combined' ? mergedSessions : displayedRawSlots;
+
+  const handleSelectDay = (day: DayOfWeek) => {
+    userHasSelectedDayRef.current = true;
+    setSelectedDay(day);
   };
 
   return (
@@ -112,9 +186,18 @@ export default function TimetablePage() {
             </p>
           </div>
 
-          <div className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-2.5 font-mono text-xs text-slate-700 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-[#0088FF]" />
-            <span>Today: {todayDayOfWeek} · {currentTimeStr}</span>
+          <div className="flex items-center gap-2">
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-2.5 font-mono text-xs text-slate-700 flex items-center gap-2 shadow-inner">
+              <Clock className="w-4 h-4 text-[#0088FF]" />
+              <span>Today: {todayDayOfWeek} · {currentTimeStr}</span>
+            </div>
+            <button
+              onClick={() => fetchTimetableData(true)}
+              title="Refresh Timetable from Database"
+              className="p-2.5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-500 hover:text-[#0088FF] transition-all active:scale-95"
+            >
+              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            </button>
           </div>
         </div>
 
@@ -164,7 +247,7 @@ export default function TimetablePage() {
               <button
                 key={full}
                 type="button"
-                onClick={() => setSelectedDay(full)}
+                onClick={() => handleSelectDay(full)}
                 className={`py-2 px-1 rounded-xl text-xs font-mono font-bold text-center transition-all relative ${
                   isSelected
                     ? 'bg-slate-900 text-white shadow-sm'
@@ -186,12 +269,71 @@ export default function TimetablePage() {
           })}
         </div>
 
+        {/* View Mode Toggle: Combined Unified Periods vs Detailed Slots */}
+        <div className="flex items-center justify-between px-1">
+          <div className="text-xs font-mono text-slate-500">
+            Schedule for <span className="font-bold text-slate-800">{selectedDay}</span> ({activeDisplayList.length} {viewMode === 'combined' ? 'Sessions' : 'Slots'})
+          </div>
+
+          <div className="inline-flex items-center p-1 rounded-xl bg-slate-100 border border-slate-200 text-xs font-mono">
+            <button
+              onClick={() => setViewMode('combined')}
+              className={`px-3 py-1 rounded-lg font-bold transition-all ${
+                viewMode === 'combined'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Combined Sessions
+            </button>
+            <button
+              onClick={() => setViewMode('detailed')}
+              className={`px-3 py-1 rounded-lg font-bold transition-all ${
+                viewMode === 'detailed'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Hourly Breakdown
+            </button>
+          </div>
+        </div>
+
+        {/* Day-wide Override Banner */}
+        {dayWideOverride && (
+          <div
+            className={`p-4 rounded-2xl border flex items-center justify-between gap-3 text-xs font-mono font-bold shadow-xs ${
+              dayWideOverride.action === 'holiday'
+                ? 'bg-purple-50/90 border-purple-300 text-purple-900'
+                : dayWideOverride.action === 'cancel'
+                ? 'bg-rose-50/90 border-rose-300 text-rose-900'
+                : 'bg-amber-50/90 border-amber-300 text-amber-900'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>
+                {dayWideOverride.action === 'holiday'
+                  ? '🌴 Academic / Public Holiday'
+                  : dayWideOverride.action === 'cancel'
+                  ? '🛑 All Lectures Canceled'
+                  : '⚠️ Lectures Postponed'}{' '}
+                on {selectedDay} ({selectedDayDate}): {dayWideOverride.subject}
+                {dayWideOverride.reason ? ` · ${dayWideOverride.reason}` : ''}
+              </span>
+            </div>
+            <span className="px-2 py-0.5 rounded bg-white/80 border text-[10px] uppercase font-black">
+              {dayWideOverride.action}
+            </span>
+          </div>
+        )}
+
         {/* Slots Timeline */}
         {loading ? (
           <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center text-slate-400 font-mono text-xs animate-pulse">
             Loading timetable schedule...
           </div>
-        ) : displayedSlots.length === 0 ? (
+        ) : activeDisplayList.length === 0 ? (
           <div className="bg-white border border-slate-200 rounded-3xl p-10 text-center space-y-2">
             <p className="font-heading font-black text-lg text-slate-800">
               No Lectures Scheduled for {selectedDay}
@@ -202,58 +344,88 @@ export default function TimetablePage() {
           </div>
         ) : (
           <div className="space-y-3">
-            {displayedSlots.map((slot) => {
+            {activeDisplayList.map((slot: any) => {
               const startMin = parseTimeToMinutes(slot.startTime);
               const endMin = parseTimeToMinutes(slot.endTime);
               const isToday = todayDayOfWeek.toLowerCase() === selectedDay.toLowerCase();
               const isOngoing = isToday && currentMinutesNow >= startMin && currentMinutesNow < endMin;
 
-              const slotOverride = overrides.find(
-                (o) =>
-                  (o.course === selectedCourse || o.course === 'ALL') &&
-                  (o.slotId === slot.id || (slot.subject && o.subject.toLowerCase() === slot.subject.toLowerCase()))
+              const slotOverride = findMatchingOverride(
+                slot,
+                overrides,
+                selectedDayDate,
+                selectedCourse
               );
 
               const isCancelled = slotOverride?.action === 'cancel';
               const isPostponed = slotOverride?.action === 'postpone';
+              const isHoliday = slotOverride?.action === 'holiday';
               const isLunch = slot.slotType === 'lunch';
               const isBreak = slot.slotType === 'break';
-              const isClass = slot.slotType === 'class' || (!isLunch && !isBreak);
+              const isStudyOrEmpty = isStudyOrEmptySlot(slot);
+              const isClass = isAcademicLecture(slot);
 
-              // Responsive color styling synced to live lecture status
+              // Check if current minute is within an internal break of a merged lecture block
+              const internalBreak = slot.breaksIncluded?.find((b: any) => {
+                const bStart = parseTimeToMinutes(b.startTime);
+                const bEnd = parseTimeToMinutes(b.endTime);
+                return currentMinutesNow >= bStart && currentMinutesNow < bEnd;
+              });
+
+              // Dynamic color styling:
+              // - Canceled -> Vibrant Rose Red!
+              // - Postponed -> Vibrant Warm Amber!
+              // - Holiday -> Vibrant Purple!
+              // - Academic Lectures ongoing -> Emerald Green!
+              // - Lunch Break -> Distinct Warm Yellow / Amber!
+              // - Study Period / Empty Slot -> Neutral Slate (NEVER green)!
               let cardContainerClass = 'border-slate-200 hover:border-slate-300 bg-white';
               let iconBoxClass = 'bg-blue-50 text-[#0088FF] border border-blue-200';
               let subjectColorClass = 'text-slate-900';
 
               if (isCancelled) {
-                cardContainerClass = 'bg-rose-50/70 border-rose-300 text-rose-900';
-                iconBoxClass = 'bg-rose-100 text-rose-700 border border-rose-200';
-                subjectColorClass = 'line-through text-rose-600';
+                cardContainerClass =
+                  'bg-rose-50/90 border-2 border-rose-400 text-rose-950 shadow-md shadow-rose-500/10';
+                iconBoxClass = 'bg-rose-600 text-white shadow-xs';
+                subjectColorClass = 'line-through text-rose-700 font-black';
               } else if (isPostponed) {
-                cardContainerClass = 'bg-amber-50/70 border-amber-300 text-amber-900';
-                iconBoxClass = 'bg-amber-100 text-amber-800 border border-amber-200';
-                subjectColorClass = 'text-amber-900';
+                cardContainerClass =
+                  'bg-amber-50/90 border-2 border-amber-400 text-amber-950 shadow-md shadow-amber-500/10';
+                iconBoxClass = 'bg-amber-500 text-amber-950 shadow-xs font-black';
+                subjectColorClass = 'text-amber-950 font-black';
+              } else if (isHoliday) {
+                cardContainerClass =
+                  'bg-purple-50/90 border-2 border-purple-400 text-purple-950 shadow-md shadow-purple-500/10';
+                iconBoxClass = 'bg-purple-600 text-white shadow-xs font-black';
+                subjectColorClass = 'text-purple-950 font-black';
               } else if (isOngoing && isClass) {
-                // Ongoing class lecture -> TURN TO GREEN COLOR!
+                // Ongoing real lecture -> EMERALD GREEN!
                 cardContainerClass =
                   'bg-gradient-to-r from-emerald-50 via-emerald-50/50 to-white border-2 border-emerald-500 ring-2 ring-emerald-500/25 shadow-md shadow-emerald-500/15';
                 iconBoxClass = 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30';
                 subjectColorClass = 'text-emerald-950 font-black';
               } else if (isOngoing && isLunch) {
-                // Ongoing lunch -> TURN TO VIBRANT YELLOW / AMBER!
+                // Ongoing lunch -> WARM YELLOW / AMBER!
                 cardContainerClass =
                   'bg-gradient-to-r from-amber-50 via-yellow-50/70 to-white border-2 border-amber-400 ring-2 ring-amber-400/25 shadow-md shadow-amber-400/15';
                 iconBoxClass = 'bg-amber-400 text-amber-950 shadow-md shadow-amber-400/20';
                 subjectColorClass = 'text-amber-950 font-black';
+              } else if (isLunch) {
+                // Static lunch -> Distinct warm yellow/amber!
+                cardContainerClass = 'bg-amber-50/40 border border-amber-200 hover:border-amber-300';
+                iconBoxClass = 'bg-amber-100 text-amber-800 border border-amber-200';
+                subjectColorClass = 'text-amber-950 font-bold';
+              } else if (isStudyOrEmpty) {
+                // Practical / Study Period / Empty Slot -> Neutral subtle slate (NEVER green)
+                cardContainerClass = isOngoing
+                  ? 'bg-slate-50 border-2 border-slate-300 ring-1 ring-slate-300/50'
+                  : 'bg-slate-50/50 border border-slate-200 hover:border-slate-300';
+                iconBoxClass = 'bg-slate-100 text-slate-500 border border-slate-200';
+                subjectColorClass = 'text-slate-700 font-bold';
               } else if (isOngoing && isBreak) {
                 cardContainerClass =
                   'bg-amber-50/60 border-2 border-amber-300 ring-1 ring-amber-300/30';
                 iconBoxClass = 'bg-amber-200 text-amber-900';
-                subjectColorClass = 'text-amber-950 font-bold';
-              } else if (isLunch) {
-                // Static lunch -> Distinct warm YELLOW / AMBER styling!
-                cardContainerClass = 'bg-amber-50/40 border border-amber-200 hover:border-amber-300';
-                iconBoxClass = 'bg-amber-100 text-amber-800 border border-amber-200';
                 subjectColorClass = 'text-amber-950 font-bold';
               } else if (isBreak) {
                 cardContainerClass = 'border-slate-200/70 bg-slate-50/60 hover:border-slate-300';
@@ -275,6 +447,8 @@ export default function TimetablePage() {
                           <Utensils className="w-4 h-4" />
                         ) : isBreak ? (
                           <Coffee className="w-4 h-4" />
+                        ) : isStudyOrEmpty ? (
+                          <Layers className="w-4 h-4" />
                         ) : (
                           <BookOpen className="w-4 h-4" />
                         )}
@@ -282,7 +456,15 @@ export default function TimetablePage() {
 
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`font-mono text-xs font-bold ${isOngoing && isClass ? 'text-emerald-950 font-black' : isOngoing && isLunch ? 'text-amber-950 font-black' : 'text-slate-900'}`}>
+                          <span
+                            className={`font-mono text-xs font-bold ${
+                              isOngoing && isClass
+                                ? 'text-emerald-950 font-black'
+                                : isOngoing && isLunch
+                                ? 'text-amber-950 font-black'
+                                : 'text-slate-900'
+                            }`}
+                          >
                             {slot.startTime} – {slot.endTime}
                           </span>
 
@@ -290,28 +472,51 @@ export default function TimetablePage() {
                           {isOngoing && isClass && !isCancelled && !isPostponed && (
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-black uppercase bg-emerald-600 text-white animate-pulse flex items-center gap-1.5 shadow-xs">
                               <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
-                              LIVE LECTURE NOW
+                              {internalBreak ? `IN-CLASS BREAK (UNTIL ${internalBreak.endTime})` : 'LIVE LECTURE NOW'}
                             </span>
                           )}
+
                           {isOngoing && isLunch && (
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-black uppercase bg-amber-400 text-amber-950 animate-pulse flex items-center gap-1.5 shadow-xs">
                               <Utensils className="w-3 h-3" />
                               LUNCH BREAK NOW
                             </span>
                           )}
+
+                          {isOngoing && isStudyOrEmpty && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-slate-200 text-slate-700">
+                              STUDY INTERVAL
+                            </span>
+                          )}
+
                           {isOngoing && isBreak && (
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-black uppercase bg-amber-200 text-amber-900 animate-pulse">
                               INTERVAL BREAK
                             </span>
                           )}
+
                           {isCancelled && (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">
-                              CANCELLED TODAY
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-black uppercase bg-rose-600 text-white shadow-xs">
+                              CANCELLED: {slotOverride?.subject || 'CANCELLED'}
                             </span>
                           )}
+
                           {isPostponed && (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-black uppercase bg-amber-100 text-amber-800 border border-amber-200">
-                              POSTPONED
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-black uppercase bg-amber-500 text-amber-950 shadow-xs">
+                              POSTPONED: {slotOverride?.subject || 'POSTPONED'}
+                            </span>
+                          )}
+
+                          {isHoliday && (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-black uppercase bg-purple-600 text-white shadow-xs">
+                              HOLIDAY RECESS
+                            </span>
+                          )}
+
+                          {/* Merged Session Badge */}
+                          {slot.isMerged && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-50 text-[#0088FF] border border-blue-200">
+                              {slot.subSlotCount} Hours Combined
                             </span>
                           )}
                         </div>
@@ -323,7 +528,7 @@ export default function TimetablePage() {
                     </div>
 
                     {/* Subject Details */}
-                    <div className="text-left sm:text-right">
+                    <div className="text-left sm:text-right space-y-0.5">
                       {isLunch ? (
                         <div>
                           <div className="font-heading font-black text-base text-amber-950 flex sm:justify-end items-center gap-2">
@@ -336,6 +541,15 @@ export default function TimetablePage() {
                             Mid-day break for TV Studies Batch 11
                           </div>
                         </div>
+                      ) : isStudyOrEmpty ? (
+                        <div>
+                          <div className="font-heading font-bold text-base text-slate-700">
+                            Practical / Study Period
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-400">
+                            Self-Study & Lab Practice · No Lecture Scheduled
+                          </div>
+                        </div>
                       ) : isBreak ? (
                         <div className="font-heading font-bold text-sm text-slate-600">
                           {slot.subject || 'Break Interval'}
@@ -343,11 +557,17 @@ export default function TimetablePage() {
                       ) : (
                         <div>
                           <div className={`font-heading font-black text-base ${subjectColorClass}`}>
-                            {slot.subject || 'Practical / Study Period'}
+                            {slot.subject}
                           </div>
                           {slot.studentGroup && (
                             <div className={`text-[11px] font-mono ${isOngoing && isClass ? 'text-emerald-700 font-bold' : 'text-slate-500'}`}>
                               Target: {slot.studentGroup}
+                            </div>
+                          )}
+                          {/* Breaks included note */}
+                          {slot.breaksIncluded && slot.breaksIncluded.length > 0 && (
+                            <div className="text-[10px] font-mono text-blue-600 font-semibold mt-0.5">
+                              Includes {slot.breaksIncluded[0].label} ({slot.breaksIncluded[0].startTime} – {slot.breaksIncluded[0].endTime})
                             </div>
                           )}
                         </div>
@@ -375,4 +595,3 @@ export default function TimetablePage() {
     </main>
   );
 }
-

@@ -6,6 +6,14 @@ import {
 } from '@/types';
 import { getTimetableEntries, getLectureOverrides } from './db';
 import { getSriLankaDateTime, parseTimeToMinutes, SriLankaTimeContext } from './time';
+import {
+  mergeTimetableSlots,
+  MergedTimetableSlot,
+  isAcademicLecture,
+  isStudyOrEmptySlot,
+  normalizeSubject,
+  findMatchingOverride,
+} from './timetableSlotUtils';
 
 export type LectureStatusType =
   | 'LECTURE_ONGOING'
@@ -22,8 +30,8 @@ export interface CourseLiveLectureStatus {
   courseName: string;
   status: LectureStatusType;
   statusLabel: string;
-  currentSlot: TimetableSlot | null;
-  nextSlot: TimetableSlot | null;
+  currentSlot: MergedTimetableSlot | TimetableSlot | null;
+  nextSlot: MergedTimetableSlot | TimetableSlot | null;
   override: TimetableOverride | null;
   dayOfWeek: string;
   currentTimeStr: string;
@@ -68,7 +76,7 @@ function evaluateCourseStatus(
       : 'Television & Digital Media Production Technology';
 
   // Filter slots for this course and current weekday
-  const daySlots = allSlots
+  const dayRawSlots = allSlots
     .filter(
       (s) =>
         (s.course === course || s.course === 'ALL') &&
@@ -76,7 +84,7 @@ function evaluateCourseStatus(
     )
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
-  if (daySlots.length === 0) {
+  if (dayRawSlots.length === 0) {
     return {
       course,
       courseName,
@@ -90,10 +98,12 @@ function evaluateCourseStatus(
     };
   }
 
+  // Merge contiguous slots of the same module into unified blocks
+  const daySlots = mergeTimetableSlots(dayRawSlots);
   const nowMin = timeContext.minutesNow;
 
-  let currentSlot: TimetableSlot | null = null;
-  let nextSlot: TimetableSlot | null = null;
+  let currentSlot: MergedTimetableSlot | null = null;
+  let nextRealAcademicSlot: MergedTimetableSlot | null = null;
 
   for (let i = 0; i < daySlots.length; i++) {
     const s = daySlots[i];
@@ -102,21 +112,36 @@ function evaluateCourseStatus(
 
     if (nowMin >= startMin && nowMin < endMin) {
       currentSlot = s;
-      nextSlot = daySlots[i + 1] || null;
-      break;
     } else if (nowMin < startMin) {
-      if (!nextSlot) nextSlot = s;
+      if (!nextRealAcademicSlot && isAcademicLecture(s)) {
+        nextRealAcademicSlot = s;
+      }
     }
   }
 
-  // Check overrides for today and this course/slot
-  const activeOverride = overrides.find(
-    (o) =>
-      (o.course === course || o.course === 'ALL') &&
-      (!o.slotId ||
-        (currentSlot && o.slotId === currentSlot.id) ||
-        (currentSlot && currentSlot.subject && o.subject && o.subject.toLowerCase() === currentSlot.subject.toLowerCase()))
-  );
+  // If no upcoming real academic slot was found after currentSlot, search remaining daySlots
+  if (!nextRealAcademicSlot && currentSlot) {
+    const currentIdx = daySlots.indexOf(currentSlot);
+    for (let j = currentIdx + 1; j < daySlots.length; j++) {
+      if (isAcademicLecture(daySlots[j])) {
+        nextRealAcademicSlot = daySlots[j];
+        break;
+      }
+    }
+  }
+
+  // Check overrides for today and this course/slot using comprehensive matcher
+  const activeOverride =
+    (currentSlot ? findMatchingOverride(currentSlot, overrides, timeContext.dateStr, course) : null) ||
+    overrides.find(
+      (o) =>
+        (o.course === course || o.course === 'ALL') &&
+        (o.action === 'holiday' ||
+          (!o.slotId &&
+            (normalizeSubject(o.subject).includes('postpone') ||
+              normalizeSubject(o.subject).includes('cancel') ||
+              normalizeSubject(o.subject).includes('all'))))
+    );
 
   if (activeOverride) {
     if (activeOverride.action === 'cancel') {
@@ -126,7 +151,7 @@ function evaluateCourseStatus(
         status: 'CANCELLED',
         statusLabel: `Cancelled: ${activeOverride.subject}`,
         currentSlot: currentSlot || null,
-        nextSlot,
+        nextSlot: nextRealAcademicSlot,
         override: activeOverride,
         dayOfWeek: timeContext.dayOfWeek,
         currentTimeStr: timeContext.displayTime,
@@ -152,7 +177,7 @@ function evaluateCourseStatus(
         status: 'POSTPONED',
         statusLabel: `Postponed: ${activeOverride.subject}`,
         currentSlot: currentSlot || null,
-        nextSlot,
+        nextSlot: nextRealAcademicSlot,
         override: activeOverride,
         dayOfWeek: timeContext.dayOfWeek,
         currentTimeStr: timeContext.displayTime,
@@ -161,40 +186,86 @@ function evaluateCourseStatus(
   }
 
   if (currentSlot) {
+    // 1. Practical / Study Period / Empty Slot: NEVER mark as LECTURE_ONGOING or turn green
+    if (isStudyOrEmptySlot(currentSlot)) {
+      if (nextRealAcademicSlot) {
+        return {
+          course,
+          courseName,
+          status: 'UPCOMING_LECTURE',
+          statusLabel: `Self-Study Period · Next: ${nextRealAcademicSlot.subject} at ${nextRealAcademicSlot.startTime}`,
+          currentSlot: null,
+          nextSlot: nextRealAcademicSlot,
+          override: null,
+          dayOfWeek: timeContext.dayOfWeek,
+          currentTimeStr: timeContext.displayTime,
+        };
+      }
+      return {
+        course,
+        courseName,
+        status: 'STANDBY',
+        statusLabel: 'Self-Study Period · No further lectures scheduled today',
+        currentSlot: null,
+        nextSlot: null,
+        override: null,
+        dayOfWeek: timeContext.dayOfWeek,
+        currentTimeStr: timeContext.displayTime,
+      };
+    }
+
+    // 2. Break
     if (currentSlot.slotType === 'break') {
       return {
         course,
         courseName,
         status: 'BREAK',
-        statusLabel: 'Short Break Interval',
+        statusLabel: nextRealAcademicSlot
+          ? `Short Break · Next: ${nextRealAcademicSlot.subject} at ${nextRealAcademicSlot.startTime}`
+          : 'Short Break Interval',
         currentSlot,
-        nextSlot,
+        nextSlot: nextRealAcademicSlot,
         override: null,
         dayOfWeek: timeContext.dayOfWeek,
         currentTimeStr: timeContext.displayTime,
       };
     }
+
+    // 3. Lunch Break
     if (currentSlot.slotType === 'lunch') {
       return {
         course,
         courseName,
         status: 'LUNCH_BREAK',
-        statusLabel: 'Lunch Break Interval',
+        statusLabel: nextRealAcademicSlot
+          ? `Lunch Break · Next: ${nextRealAcademicSlot.subject} at ${nextRealAcademicSlot.startTime}`
+          : 'Lunch Break Interval',
         currentSlot,
-        nextSlot,
+        nextSlot: nextRealAcademicSlot,
         override: null,
         dayOfWeek: timeContext.dayOfWeek,
         currentTimeStr: timeContext.displayTime,
       };
     }
-    if (currentSlot.subject && currentSlot.slotType === 'class') {
+
+    // 4. Real Academic Lecture Ongoing
+    if (isAcademicLecture(currentSlot)) {
+      // Check if current minute is within an internal break of this merged lecture
+      const activeBreak = currentSlot.breaksIncluded.find((b) => {
+        const bStart = parseTimeToMinutes(b.startTime);
+        const bEnd = parseTimeToMinutes(b.endTime);
+        return nowMin >= bStart && nowMin < bEnd;
+      });
+
       return {
         course,
         courseName,
         status: 'LECTURE_ONGOING',
-        statusLabel: 'Live Session in Progress',
+        statusLabel: activeBreak
+          ? `${currentSlot.subject} · In-Class Break (Resumes ${activeBreak.endTime})`
+          : 'Live Session in Progress',
         currentSlot,
-        nextSlot,
+        nextSlot: nextRealAcademicSlot,
         override: null,
         dayOfWeek: timeContext.dayOfWeek,
         currentTimeStr: timeContext.displayTime,
@@ -202,14 +273,15 @@ function evaluateCourseStatus(
     }
   }
 
-  if (nextSlot) {
+  // If no slot is current, but an upcoming lecture exists today
+  if (nextRealAcademicSlot) {
     return {
       course,
       courseName,
       status: 'UPCOMING_LECTURE',
-      statusLabel: `Upcoming at ${nextSlot.startTime}`,
+      statusLabel: `Upcoming: ${nextRealAcademicSlot.subject} at ${nextRealAcademicSlot.startTime}`,
       currentSlot: null,
-      nextSlot,
+      nextSlot: nextRealAcademicSlot,
       override: null,
       dayOfWeek: timeContext.dayOfWeek,
       currentTimeStr: timeContext.displayTime,
@@ -228,4 +300,3 @@ function evaluateCourseStatus(
     currentTimeStr: timeContext.displayTime,
   };
 }
-
