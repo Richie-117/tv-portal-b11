@@ -152,7 +152,7 @@ export default function LoginPage() {
             TV Studies Portal
           </h1>
           <p className="text-xs text-slate-500 font-semibold">
-            Batch 11 Student Accounts & Academic Admin Suite
+            Batch 11 Student Accounts & Academic Portal
           </p>
         </div>
 
@@ -219,7 +219,7 @@ export default function LoginPage() {
                     required
                     value={studentNumber}
                     onChange={(e) => setStudentNumber(e.target.value.toUpperCase())}
-                    placeholder="e.g. RT/TPOPT/26/02 or tvadminb11"
+                    placeholder="e.g. RT/TPOPT/26/02"
                     className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-300 font-mono text-sm uppercase tracking-wide focus:outline-none focus:border-[#0088FF] focus:ring-2 focus:ring-[#0088FF]/20"
                   />
                 </div>
