@@ -70,8 +70,9 @@ export default function CheckInPage() {
           const main = data.activeSession || data.activeSessions[0];
           const isNewSession = lastActiveSessionIdRef.current !== main.id;
           lastActiveSessionIdRef.current = main.id;
+          const activeList: ActiveSession[] = data.activeSessions || [main];
           setActiveSession(main);
-          setActiveSessions(data.activeSessions || [main]);
+          setActiveSessions(activeList);
 
           // Device lock recovery from localStorage
           let foundReceipt = false;
@@ -89,7 +90,13 @@ export default function CheckInPage() {
             setSuccessResult(null);
           }
 
-          if (!userChosenCourseRef.current) {
+          const hasTpopt = activeList.some((s) => s.course === 'TPOPT' || s.course === 'ALL');
+          const hasTprpt = activeList.some((s) => s.course === 'TPRPT' || s.course === 'ALL');
+          if (hasTpopt && !hasTprpt) {
+            setSelectedCourse('TPOPT');
+          } else if (hasTprpt && !hasTpopt) {
+            setSelectedCourse('TPRPT');
+          } else if (!userChosenCourseRef.current) {
             if (main.course === 'TPRPT') setSelectedCourse('TPRPT');
             else if (main.course === 'TPOPT') setSelectedCourse('TPOPT');
           }
@@ -114,6 +121,16 @@ export default function CheckInPage() {
     const interval = setInterval(() => fetchActiveStatus(false), 15000);
     return () => clearInterval(interval);
   }, []);
+
+  const allowsTpopt = useMemo(() => {
+    const list = activeSessions.length > 0 ? activeSessions : activeSession ? [activeSession] : [];
+    return list.some((s) => s.course === 'TPOPT' || s.course === 'ALL');
+  }, [activeSessions, activeSession]);
+
+  const allowsTprpt = useMemo(() => {
+    const list = activeSessions.length > 0 ? activeSessions : activeSession ? [activeSession] : [];
+    return list.some((s) => s.course === 'TPRPT' || s.course === 'ALL');
+  }, [activeSessions, activeSession]);
 
   const currentSession = useMemo(() => {
     if (!activeSessions || activeSessions.length === 0) return activeSession;
@@ -148,6 +165,8 @@ export default function CheckInPage() {
   }, [matchedStudent, checkedInNumbers]);
 
   const handleSelectCourse = (course: CourseType) => {
+    if (course === 'TPOPT' && !allowsTpopt) return;
+    if (course === 'TPRPT' && !allowsTprpt) return;
     userChosenCourseRef.current = true;
     setSelectedCourse(course);
     setErrorMessage(null);
@@ -442,11 +461,11 @@ export default function CheckInPage() {
                 <h2 className="font-heading text-xl sm:text-2xl font-black text-slate-900 tracking-tight leading-tight">
                   {(currentSession || activeSession)?.moduleTitle}
                 </h2>
-                <div className="flex items-center gap-2 pt-1 text-xs text-slate-700 font-semibold">
+                <div className="flex items-center gap-2 pt-1 text-xs text-slate-700 font-semibold flex-wrap">
                   <span className="font-mono text-[11px] font-bold text-[#0088FF] bg-white px-2 py-0.5 rounded-md border border-blue-200">
-                    {(currentSession || activeSession)?.course === 'ALL'
+                    {allowsTpopt && allowsTprpt
                       ? `ALL BATCH 11 (COMMON) · ${selectedCourse} ACTIVE`
-                      : `${selectedCourse} COHORT SELECTED`}
+                      : `${selectedCourse} ONLY · OTHER COHORT LOCKED`}
                   </span>
                   <span>·</span>
                   <span className="text-slate-800">{(currentSession || activeSession)?.sessionType}</span>
@@ -464,17 +483,27 @@ export default function CheckInPage() {
 
             {/* Step 1: Select Programme */}
             <div className="space-y-2">
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider font-mono">
-                [01] SELECT YOUR PROGRAMME
-              </label>
+              <div className="flex items-center justify-between gap-2">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider font-mono">
+                  [01] SELECT YOUR PROGRAMME
+                </label>
+                {!(allowsTpopt && allowsTprpt) && (
+                  <span className="text-[10px] font-mono font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                    {allowsTpopt ? 'TPOPT Only' : 'TPRPT Only'}
+                  </span>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-2.5">
                 <button
                   type="button"
+                  disabled={!allowsTpopt}
                   onClick={() => handleSelectCourse('TPOPT')}
-                  className={`p-3.5 rounded-2xl border-2 text-left transition-all touch-target cursor-pointer ${
-                    selectedCourse === 'TPOPT'
-                      ? 'bg-gradient-to-br from-[#FF7900] to-[#E66C00] text-white border-[#FF7900] shadow-md shadow-[#FF7900]/30 scale-[1.01]'
-                      : 'bg-white text-slate-800 border-slate-200 hover:border-slate-300'
+                  className={`p-3.5 rounded-2xl border-2 text-left transition-all touch-target ${
+                    !allowsTpopt
+                      ? 'bg-slate-100 text-slate-400 border-slate-200 opacity-50 cursor-not-allowed'
+                      : selectedCourse === 'TPOPT'
+                      ? 'bg-gradient-to-br from-[#FF7900] to-[#E66C00] text-white border-[#FF7900] shadow-md shadow-[#FF7900]/30 scale-[1.01] cursor-pointer'
+                      : 'bg-white text-slate-800 border-slate-200 hover:border-slate-300 cursor-pointer'
                   }`}
                 >
                   <div className="text-base font-black font-heading leading-tight">
@@ -482,20 +511,27 @@ export default function CheckInPage() {
                   </div>
                   <div
                     className={`text-[11px] font-semibold leading-tight ${
-                      selectedCourse === 'TPOPT' ? 'text-white' : 'text-slate-500'
+                      !allowsTpopt
+                        ? 'text-slate-400'
+                        : selectedCourse === 'TPOPT'
+                        ? 'text-white'
+                        : 'text-slate-500'
                     }`}
                   >
-                    Post Production
+                    {allowsTpopt ? 'Post Production' : 'Not open'}
                   </div>
                 </button>
 
                 <button
                   type="button"
+                  disabled={!allowsTprpt}
                   onClick={() => handleSelectCourse('TPRPT')}
-                  className={`p-3.5 rounded-2xl border-2 text-left transition-all touch-target cursor-pointer ${
-                    selectedCourse === 'TPRPT'
-                      ? 'bg-gradient-to-br from-[#0088FF] to-[#0055CC] text-white border-[#0088FF] shadow-md shadow-[#0088FF]/30 scale-[1.01]'
-                      : 'bg-white text-slate-800 border-slate-200 hover:border-slate-300'
+                  className={`p-3.5 rounded-2xl border-2 text-left transition-all touch-target ${
+                    !allowsTprpt
+                      ? 'bg-slate-100 text-slate-400 border-slate-200 opacity-50 cursor-not-allowed'
+                      : selectedCourse === 'TPRPT'
+                      ? 'bg-gradient-to-br from-[#0088FF] to-[#0055CC] text-white border-[#0088FF] shadow-md shadow-[#0088FF]/30 scale-[1.01] cursor-pointer'
+                      : 'bg-white text-slate-800 border-slate-200 hover:border-slate-300 cursor-pointer'
                   }`}
                 >
                   <div className="text-base font-black font-heading leading-tight">
@@ -503,10 +539,14 @@ export default function CheckInPage() {
                   </div>
                   <div
                     className={`text-[11px] font-semibold leading-tight ${
-                      selectedCourse === 'TPRPT' ? 'text-white' : 'text-slate-500'
+                      !allowsTprpt
+                        ? 'text-slate-400'
+                        : selectedCourse === 'TPRPT'
+                        ? 'text-white'
+                        : 'text-slate-500'
                     }`}
                   >
-                    Production Tech
+                    {allowsTprpt ? 'Production Tech' : 'Not open'}
                   </div>
                 </button>
               </div>

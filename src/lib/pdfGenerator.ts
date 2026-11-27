@@ -43,10 +43,10 @@ export function generateSessionAttendancePDF(
   const presentCount = records.filter((r) => r.status === 'present').length;
   const absentCount = records.filter((r) => r.status === 'absent').length;
   const excusedCount = records.filter((r) => r.status === 'excused').length;
-  const total = records.length;
-  const pct = total > 0 ? Math.round((presentCount / (presentCount + absentCount || 1)) * 100) : 0;
+  const denom = presentCount + absentCount;
+  const pctLabel = denom > 0 ? `${Math.round((presentCount / denom) * 100)}%` : 'N/A';
 
-  doc.text(`Present: ${presentCount} | Absent: ${absentCount} | Excused: ${excusedCount} | Rate: ${pct}%`, 130, 46);
+  doc.text(`Present: ${presentCount} | Absent: ${absentCount} | Excused: ${excusedCount} | Rate: ${pctLabel}`, 124, 46);
 
   // Table
   const tableData = records.map((r, idx) => [

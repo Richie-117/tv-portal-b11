@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
     const result = await finalizeSessionAttendance(sessionId, adminName || 'Administrator');
     return NextResponse.json({
       success: true,
-      message: `Session finalized. ${result.affectedCount} unrecorded students marked Absent.`,
+      message: `Session finalized. ${result.affectedCount} unrecorded students marked Excused.`,
       affectedCount: result.affectedCount,
     });
   } catch (err: any) {

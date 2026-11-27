@@ -13,7 +13,7 @@ export async function generateSessionAttendanceExcel(
   const worksheet = workbook.addWorksheet('Session Attendance');
 
   // Title Block
-  worksheet.mergeCells('A1:F1');
+  worksheet.mergeCells('A1:G1');
   const titleCell = worksheet.getCell('A1');
   titleCell.value = 'UNIVERSITY COLLEGE OF RATMALANA — DIVISION OF TELEVISION STUDIES';
   titleCell.font = { name: 'Calibri', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -21,7 +21,7 @@ export async function generateSessionAttendanceExcel(
   titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
   worksheet.getRow(1).height = 26;
 
-  worksheet.mergeCells('A2:F2');
+  worksheet.mergeCells('A2:G2');
   const subCell = worksheet.getCell('A2');
   subCell.value = `Official Attendance Record — ${session.moduleTitle} (${session.moduleCode}) | Date: ${session.date} (${session.startTime} - ${session.endTime})`;
   subCell.font = { name: 'Calibri', size: 10, italic: true };

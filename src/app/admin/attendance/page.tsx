@@ -1924,7 +1924,7 @@ export default function AdminAttendancePage() {
                 Finalize Session Attendance?
               </h3>
               <p className="text-xs text-slate-600">
-                This will automatically convert all remaining <span className="font-bold text-amber-600">{pendingCount} unrecorded students</span> for this session into <span className="font-bold text-rose-600">Absent</span> and conclude roll-call.
+                This will automatically mark all remaining <span className="font-bold text-amber-600">{pendingCount} unrecorded students</span> for this session as <span className="font-bold text-amber-700">Excused</span> and conclude roll-call. You can still mark individual students <span className="font-bold text-rose-600">Absent</span> manually in the student list.
               </p>
             </div>
 

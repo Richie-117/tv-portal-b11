@@ -754,8 +754,9 @@ export async function saveOrUpdateAttendanceRecordsBatch(records: AttendanceReco
 
 /**
  * Finalize Attendance Rule:
- * Converts all eligible unmarked/pending students for this session into 'absent'.
- * Does not alter existing 'present' or 'excused' records.
+ * Converts all eligible unmarked/pending students for this session into 'excused'.
+ * Does not alter existing 'present', 'absent', or 'excused' records
+ * (admins mark 'absent' manually in the record student list).
  */
 export async function finalizeSessionAttendance(
   sessionId: string,
@@ -775,23 +776,23 @@ export async function finalizeSessionAttendance(
   const missingStudents = eligibleStudents.filter((s) => !recordedStudentIds.has(s.id));
   const nowStr = new Date().toISOString();
 
-  const newAbsentRecords: AttendanceRecord[] = missingStudents.map((s) => ({
+  const newExcusedRecords: AttendanceRecord[] = missingStudents.map((s) => ({
     id: `rec-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     sessionId,
     studentId: s.id,
     studentNumber: s.studentNumber,
     studentName: s.fullName,
     course: s.course,
-    status: 'absent',
+    status: 'excused',
     submissionSource: 'finalized',
     markedAt: nowStr,
     markedBy: adminName,
   }));
 
   const supabase = getSupabaseAdmin();
-  if (supabase && newAbsentRecords.length > 0) {
+  if (supabase && newExcusedRecords.length > 0) {
     const { error } = await supabase.from('attendance_records').upsert(
-      newAbsentRecords.map((r) => ({
+      newExcusedRecords.map((r) => ({
         id: r.id,
         session_id: r.sessionId,
         student_id: r.studentId,
@@ -813,10 +814,48 @@ export async function finalizeSessionAttendance(
   await updateCheckinSessionStatus(sessionId, 'finalized', 'completed');
 
   await saveLocalDatabase((db) => {
-    newAbsentRecords.forEach((r) => db.attendanceRecords.push(r));
+    newExcusedRecords.forEach((r) => db.attendanceRecords.push(r));
   });
 
-  return { affectedCount: newAbsentRecords.length };
+  return { affectedCount: newExcusedRecords.length };
+}
+
+export async function getExportableSessionRecords(sessionId: string): Promise<{
+  session: CheckinSession;
+  records: AttendanceRecord[];
+} | null> {
+  const session = await getCheckinSessionById(sessionId);
+  if (!session) return null;
+
+  const [allStudents, existingRecords] = await Promise.all([
+    getStudents(),
+    getAttendanceRecords(sessionId),
+  ]);
+
+  const eligibleStudents = allStudents
+    .filter((s) => session.course === 'ALL' || s.course === session.course)
+    .sort((a, b) => a.studentNumber.localeCompare(b.studentNumber));
+
+  const recordMap = new Map(existingRecords.map((r) => [r.studentId, r]));
+  const nowStr = new Date().toISOString();
+
+  const fullRecords: AttendanceRecord[] = eligibleStudents.map((s) => {
+    const existing = recordMap.get(s.id);
+    if (existing) return existing;
+    return {
+      id: `export-${sessionId}-${s.id}`,
+      sessionId,
+      studentId: s.id,
+      studentNumber: s.studentNumber,
+      studentName: s.fullName,
+      course: s.course,
+      status: 'excused',
+      submissionSource: 'finalized',
+      markedAt: nowStr,
+    };
+  });
+
+  return { session, records: fullRecords };
 }
 
 // =============================================================================

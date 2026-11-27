@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getCheckinSessionById, getAttendanceRecords } from '@/lib/db';
+import { getExportableSessionRecords } from '@/lib/db';
 import { generateSessionAttendanceExcel } from '@/lib/excelExport';
 
 export const dynamic = 'force-dynamic';
@@ -13,10 +13,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Session ID is required' }, { status: 400 });
     }
 
-    const session = await getCheckinSessionById(sessionId);
-    if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+    const exported = await getExportableSessionRecords(sessionId);
+    if (!exported) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
 
-    const records = await getAttendanceRecords(sessionId);
+    const { session, records } = exported;
     const excelBuffer = await generateSessionAttendanceExcel(session, records);
 
     const filename = `Attendance_${session.moduleCode}_${session.date}.xlsx`;
