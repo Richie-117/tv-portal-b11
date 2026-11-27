@@ -4,7 +4,6 @@ import {
   getAttendanceCheckins,
   getAttendanceRecords,
   getStudents,
-  updateCheckinSessionStatus,
 } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -26,18 +25,13 @@ export async function GET(req: NextRequest) {
     }));
 
     const allSessions = await getCheckinSessions();
-    const now = Date.now();
 
-    // Find active candidates
+    // Find active candidates (open until explicitly closed/finalized by an admin)
     const activeCandidates = allSessions.filter((s) => s.checkinStatus === 'active');
     const validActiveSessions = [];
 
     for (const sess of activeCandidates) {
       if (sess.sessionStatus === 'cancelled' || sess.sessionStatus === 'postponed') {
-        continue;
-      }
-      if (sess.checkinExpiresAt && now > new Date(sess.checkinExpiresAt).getTime()) {
-        await updateCheckinSessionStatus(sess.id, 'expired').catch(() => {});
         continue;
       }
       if (requestedCourse && sess.course !== 'ALL' && sess.course !== requestedCourse) {

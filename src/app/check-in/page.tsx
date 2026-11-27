@@ -46,6 +46,7 @@ export default function CheckInPage() {
   const [checkedInNumbers, setCheckedInNumbers] = useState<string[]>([]);
   const [selectedCourse, setSelectedCourse] = useState<CourseType>('TPOPT');
   const userChosenCourseRef = useRef<boolean>(false);
+  const lastActiveSessionIdRef = useRef<string | null>(null);
   const [inputDigits, setInputDigits] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -67,25 +68,33 @@ export default function CheckInPage() {
       if (data.success) {
         if (data.hasActiveSession && (data.activeSession || data.activeSessions?.length > 0)) {
           const main = data.activeSession || data.activeSessions[0];
+          const isNewSession = lastActiveSessionIdRef.current !== main.id;
+          lastActiveSessionIdRef.current = main.id;
           setActiveSession(main);
           setActiveSessions(data.activeSessions || [main]);
 
           // Device lock recovery from localStorage
+          let foundReceipt = false;
           try {
             const savedReceipt = localStorage.getItem(`tv_checkin_${main.id}`);
             if (savedReceipt) {
               const parsed = JSON.parse(savedReceipt);
               if (parsed && parsed.studentNumber) {
                 setSuccessResult(parsed);
+                foundReceipt = true;
               }
             }
           } catch {}
+          if (isNewSession && !foundReceipt) {
+            setSuccessResult(null);
+          }
 
           if (!userChosenCourseRef.current) {
             if (main.course === 'TPRPT') setSelectedCourse('TPRPT');
             else if (main.course === 'TPOPT') setSelectedCourse('TPOPT');
           }
         } else {
+          lastActiveSessionIdRef.current = null;
           setActiveSession(null);
           setActiveSessions([]);
         }

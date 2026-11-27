@@ -3,7 +3,7 @@ import {
   getInvitations,
   createInvitation,
   getStudents,
-  getLocalDatabase,
+  getUsers,
   revokeUserAccount,
   revokeInvitation,
 } from '@/lib/db';
@@ -11,22 +11,23 @@ import { generateInviteToken } from '@/lib/auth';
 import { Invitation } from '@/types';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 
 export async function GET() {
   try {
-    const [invitations, allStudents, db] = await Promise.all([
+    const [invitations, allStudents, activeUsers] = await Promise.all([
       getInvitations(),
       getStudents(),
-      getLocalDatabase(),
+      getUsers(),
     ]);
 
-    const activeUsers = db.users || [];
     const activatedStudentIds = new Set(
-      activeUsers.filter((u) => u.studentId).map((u) => u.studentId)
+      activeUsers.filter((u) => u.isActive && u.studentId).map((u) => u.studentId)
     );
     const activatedStudentNumbers = new Set(
       activeUsers
-        .filter((u) => Boolean(u.studentNumber))
+        .filter((u) => u.isActive && Boolean(u.studentNumber))
         .map((u) => (u.studentNumber as string).toUpperCase())
     );
 
@@ -47,11 +48,14 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({
-      success: true,
-      invitations,
-      students: studentStatusList,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        invitations,
+        students: studentStatusList,
+      },
+      { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' } }
+    );
   } catch (err: any) {
     return NextResponse.json({ error: 'Failed to fetch invites' }, { status: 500 });
   }
@@ -74,7 +78,7 @@ export async function POST(req: NextRequest) {
     const expiresAt = new Date(Date.now() + days * 86400 * 1000).toISOString();
 
     const newInvite: Invitation = {
-      id: `inv-${Date.now()}`,
+      id: `inv-${Date.now()}-${clearToken}`,
       studentId: student.id,
       studentNumber: student.studentNumber,
       course: student.course,
@@ -93,7 +97,8 @@ export async function POST(req: NextRequest) {
       clearToken,
     });
   } catch (err: any) {
-    return NextResponse.json({ error: 'Failed to generate invite' }, { status: 500 });
+    console.error('Generate invite error:', err);
+    return NextResponse.json({ error: err.message || 'Failed to generate invite' }, { status: 500 });
   }
 }
 

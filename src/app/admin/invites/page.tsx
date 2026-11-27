@@ -32,7 +32,7 @@ export default function AdminInvitesPage() {
 
   const fetchInvites = async () => {
     try {
-      const res = await fetch('/api/admin/invites');
+      const res = await fetch('/api/admin/invites', { cache: 'no-store' });
       const data = await res.json();
       if (data.success) {
         setStudents(data.students || []);
@@ -249,7 +249,7 @@ export default function AdminInvitesPage() {
           </div>
 
           {/* Search & Filter Toolbar */}
-          <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+          <div className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
             {/* Search Input */}
             <div className="relative flex-1">
               <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -265,12 +265,12 @@ export default function AdminInvitesPage() {
             </div>
 
             {/* Course Filter Tabs */}
-            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200">
+            <div className="grid grid-cols-3 sm:flex sm:items-center gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200">
               {(['ALL', 'TPOPT', 'TPRPT'] as const).map((course) => (
                 <button
                   key={course}
                   onClick={() => setCourseFilter(course)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold transition-all ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold transition-all text-center ${
                     courseFilter === course
                       ? 'bg-white text-slate-900 shadow-sm'
                       : 'text-slate-600 hover:text-slate-900'
@@ -282,7 +282,7 @@ export default function AdminInvitesPage() {
             </div>
 
             {/* Status Filter Tabs */}
-            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200">
+            <div className="grid grid-cols-2 sm:flex sm:items-center gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200">
               {[
                 { key: 'ALL', label: 'All' },
                 { key: 'ACTIVATED', label: 'Activated' },
@@ -292,7 +292,7 @@ export default function AdminInvitesPage() {
                 <button
                   key={item.key}
                   onClick={() => setStatusFilter(item.key as any)}
-                  className={`px-2.5 py-1.5 rounded-xl text-[11px] font-mono font-bold transition-all ${
+                  className={`px-2.5 py-1.5 rounded-xl text-[11px] font-mono font-bold transition-all text-center ${
                     statusFilter === item.key
                       ? 'bg-white text-slate-900 shadow-sm'
                       : 'text-slate-600 hover:text-slate-900'
@@ -365,7 +365,7 @@ export default function AdminInvitesPage() {
                           </button>
                         </>
                       ) : student.hasPendingInvite && student.inviteToken ? (
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap justify-end">
                           <span className="font-mono text-xs font-black bg-blue-50 text-[#0088FF] border border-blue-200 px-3 py-1.5 rounded-xl tracking-wider">
                             {student.inviteToken}
                           </span>

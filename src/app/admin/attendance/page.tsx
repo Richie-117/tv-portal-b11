@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -60,7 +60,6 @@ export default function AdminAttendancePage() {
   const [broadcastDate, setBroadcastDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [broadcastStartTime, setBroadcastStartTime] = useState('08:30');
   const [broadcastEndTime, setBroadcastEndTime] = useState('16:30');
-  const [broadcastDuration, setBroadcastDuration] = useState<number>(30);
   const [broadcastNotes, setBroadcastNotes] = useState('');
   const [isPushing, setIsPushing] = useState(false);
 
@@ -76,6 +75,11 @@ export default function AdminAttendancePage() {
   // Finalize Confirmation Modal
   const [showFinalizeModal, setShowFinalizeModal] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
+
+  const isSavingRef = useRef(false);
+  const isFinalizingRef = useRef(false);
+  isSavingRef.current = isSaving;
+  isFinalizingRef.current = isFinalizing;
 
   // Broadcast Course Filter: 'ALL' | 'COMMON' | 'TPOPT' | 'TPRPT'
   const [broadcastCourseFilter, setBroadcastCourseFilter] = useState<'ALL' | 'COMMON' | 'TPOPT' | 'TPRPT'>('ALL');
@@ -93,10 +97,10 @@ export default function AdminAttendancePage() {
     if (showIndicator) setIsRefreshing(true);
     try {
       const [sessRes, recRes, stuRes, ovrRes] = await Promise.all([
-        fetch('/api/admin/broadcast'),
-        fetch('/api/admin/attendance'),
-        fetch('/api/admin/invites'),
-        fetch('/api/timetable/override'),
+        fetch('/api/admin/broadcast', { cache: 'no-store' }),
+        fetch('/api/admin/attendance', { cache: 'no-store' }),
+        fetch('/api/admin/invites', { cache: 'no-store' }),
+        fetch('/api/timetable/override', { cache: 'no-store' }),
       ]);
       const [sessData, recData, stuData, ovrData] = await Promise.all([
         sessRes.json(),
@@ -111,8 +115,10 @@ export default function AdminAttendancePage() {
       if (stuData.success) {
         const stuList = stuData.students || [];
         setStudents(stuList);
-        if (stuList.length > 0 && !selectedStudentId) {
-          setSelectedStudentId(stuList[0].id);
+        if (stuList.length > 0) {
+          setSelectedStudentId((prev) =>
+            prev && stuList.some((s: any) => s.id === prev) ? prev : stuList[0].id
+          );
         }
       }
     } catch (err) {
@@ -194,22 +200,28 @@ export default function AdminAttendancePage() {
 
     // Live Telemetry Auto-Poll: Silently refresh records every 4s so student submissions update live
     const interval = setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible' && !isSaving && !isFinalizing) {
+      if (
+        typeof document !== 'undefined' &&
+        document.visibilityState === 'visible' &&
+        !isSavingRef.current &&
+        !isFinalizingRef.current
+      ) {
         fetchAllData(false);
       }
     }, 4000);
 
     return () => clearInterval(interval);
-  }, [isSaving, isFinalizing]);
+  }, []);
 
   const openSessionEditor = async (session: CheckinSession) => {
     setActiveEditorSession(session);
     setSearchTerm('');
     setSaveFeedback(null);
     try {
-      const res = await fetch(`/api/admin/attendance?sessionId=${session.id}`);
+      const res = await fetch(`/api/admin/attendance?sessionId=${session.id}`, { cache: 'no-store' });
       const data = await res.json();
       if (data.success) {
+        if (data.session) setActiveEditorSession(data.session);
         setRoster(data.roster || []);
         const sMap: Record<string, AttendanceStatus> = {};
         const eMap: Record<string, string> = {};
@@ -243,16 +255,17 @@ export default function AdminAttendancePage() {
           date: broadcastDate,
           startTime: broadcastStartTime,
           endTime: broadcastEndTime,
-          durationMinutes: broadcastDuration,
           notes: broadcastNotes,
         }),
       });
 
       const data = await res.json();
-      if (data.success) {
+      if (res.ok && data.success) {
         setShowBroadcastModal(false);
         await fetchAllData();
         if (data.session) openSessionEditor(data.session);
+      } else {
+        alert(data.error || 'Failed to push check-in broadcast');
       }
     } catch {
       alert('Failed to push check-in broadcast');
@@ -262,16 +275,23 @@ export default function AdminAttendancePage() {
   };
 
   const handleCloseSessionEarly = async (sessionId: string) => {
-    if (!confirm('Close this check-in window early? Students will no longer be able to self-check in.')) return;
+    if (!confirm('Close this check-in window? Students will no longer be able to self-check in.')) return;
     try {
-      await fetch('/api/admin/broadcast', {
+      const res = await fetch('/api/admin/broadcast', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, status: 'closed' }),
       });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to close check-in window');
+        return;
+      }
       await fetchAllData();
       if (activeEditorSession?.id === sessionId) {
-        setActiveEditorSession((prev) => (prev ? { ...prev, checkinStatus: 'closed' } : null));
+        setActiveEditorSession((prev) =>
+          data.session ? data.session : prev ? { ...prev, checkinStatus: 'closed' } : null
+        );
       }
     } catch {
       alert('Failed to close check-in window');
@@ -279,16 +299,27 @@ export default function AdminAttendancePage() {
   };
 
   const handleReopenSession = async (sessionId: string) => {
-    if (!confirm('Reopen this check-in window? Students will be able to submit check-in again.')) return;
+    if (!confirm('Reopen this check-in window? Students will be able to submit check-in again until you close it.')) return;
     try {
-      await fetch('/api/admin/broadcast', {
+      const res = await fetch('/api/admin/broadcast', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, status: 'active' }),
       });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to reopen check-in window');
+        return;
+      }
       await fetchAllData();
       if (activeEditorSession?.id === sessionId) {
-        setActiveEditorSession((prev) => (prev ? { ...prev, checkinStatus: 'active' } : null));
+        setActiveEditorSession((prev) =>
+          data.session
+            ? data.session
+            : prev
+            ? { ...prev, checkinStatus: 'active', sessionStatus: 'active', checkinExpiresAt: undefined }
+            : null
+        );
       }
     } catch {
       alert('Failed to reopen check-in window');
@@ -327,42 +358,63 @@ export default function AdminAttendancePage() {
     setSaveFeedback(null);
 
     try {
-      for (const student of roster) {
-        const newStatus = statusMap[student.studentId];
-        const newExcuse = excuseMap[student.studentId];
-        if (newStatus && newStatus !== student.status) {
-          await fetch('/api/admin/attendance', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sessionId: activeEditorSession.id,
-              studentId: student.studentId,
-              status: newStatus,
-              excuseReason: newExcuse || '',
-            }),
-          });
+      const updates = roster
+        .filter((student) => {
+          const newStatus = statusMap[student.studentId] || student.status;
+          const newExcuse = (excuseMap[student.studentId] || '').trim();
+          const oldExcuse = (student.excuseReason || '').trim();
+          return newStatus !== student.status || newExcuse !== oldExcuse;
+        })
+        .map((student) => ({
+          studentId: student.studentId,
+          status: statusMap[student.studentId] || student.status,
+          excuseReason: (excuseMap[student.studentId] || '').trim(),
+        }));
+
+      if (updates.length > 0) {
+        const saveRes = await fetch('/api/admin/attendance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: activeEditorSession.id,
+            updates,
+          }),
+        });
+        const saveData = await saveRes.json();
+        if (!saveRes.ok || !saveData.success) {
+          throw new Error(saveData.error || 'Failed to save attendance updates');
         }
       }
 
       if (closeWindowAfterSave) {
-        await fetch('/api/admin/broadcast', {
+        const closeRes = await fetch('/api/admin/broadcast', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId: activeEditorSession.id, status: 'closed' }),
         });
-        setActiveEditorSession((prev) => (prev ? { ...prev, checkinStatus: 'closed' } : null));
+        const closeData = await closeRes.json();
+        if (!closeRes.ok || !closeData.success) {
+          throw new Error(closeData.error || 'Saved attendance, but failed to close check-in window');
+        }
+        setActiveEditorSession((prev) =>
+          closeData.session ? closeData.session : prev ? { ...prev, checkinStatus: 'closed' } : null
+        );
         setSaveFeedback('Session saved & check-in window successfully closed!');
       } else {
-        setSaveFeedback('Session attendance successfully saved to database!');
+        setSaveFeedback(
+          updates.length > 0
+            ? `Saved ${updates.length} student update${updates.length === 1 ? '' : 's'} to database!`
+            : 'No changes to save — attendance is up to date.'
+        );
       }
 
       await openSessionEditor(activeEditorSession);
       await fetchAllData();
-    } catch {
-      setSaveFeedback('Error saving updates');
+    } catch (err: any) {
+      setSaveFeedback(`Error: ${err?.message || 'Failed saving updates'}`);
     } finally {
       setIsSaving(false);
-      setTimeout(() => setSaveFeedback(null), 3500);
+      setTimeout(() => setSaveFeedback(null), 4000);
     }
   };
 
@@ -539,23 +591,23 @@ export default function AdminAttendancePage() {
         
         {/* Navigation & View Toggle */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <Link
               href="/admin"
-              className="inline-flex items-center gap-2 text-xs font-mono font-bold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 px-3.5 py-2 rounded-xl shadow-sm"
+              className="inline-flex items-center gap-2 text-xs font-mono font-bold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 px-3 py-2 rounded-xl shadow-sm"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Admin Suite</span>
             </Link>
 
             {/* View Switcher Pills */}
-            <div className="flex items-center bg-white border border-slate-200 rounded-xl p-1 shadow-sm">
+            <div className="flex items-center bg-white border border-slate-200 rounded-xl p-1 shadow-sm flex-1 sm:flex-initial justify-center">
               <button
                 onClick={() => {
                   setViewMode('sessions');
                   setActiveEditorSession(null);
                 }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
+                className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
                   viewMode === 'sessions'
                     ? 'bg-slate-900 text-white shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
@@ -566,7 +618,7 @@ export default function AdminAttendancePage() {
               </button>
               <button
                 onClick={() => setViewMode('inspector')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
+                className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
                   viewMode === 'inspector'
                     ? 'bg-[#0088FF] text-white shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
@@ -604,14 +656,14 @@ export default function AdminAttendancePage() {
           <>
             {!activeEditorSession ? (
               /* Broadcasts Overview */
-              <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6 hud-box">
+              <div className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-8 shadow-sm space-y-6 hud-box overflow-hidden">
                 <span className="hud-corner-tl" />
                 <span className="hud-corner-tr" />
                 <span className="hud-corner-bl" />
                 <span className="hud-corner-br" />
 
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
-                  <div>
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                  <div className="min-w-0">
                     <h1 className="font-heading font-black text-xl text-slate-900 tracking-tight">
                       Attendance Roll-Call Broadcasts
                     </h1>
@@ -621,7 +673,7 @@ export default function AdminAttendancePage() {
                   </div>
 
                   {/* Course Filter Tabs */}
-                  <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200">
+                  <div className="grid grid-cols-2 sm:flex sm:items-center gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200 w-full lg:w-auto">
                     {[
                       { key: 'ALL', label: 'All Broadcasts' },
                       { key: 'COMMON', label: 'Common (Both)' },
@@ -639,7 +691,7 @@ export default function AdminAttendancePage() {
                           key={tab.key}
                           type="button"
                           onClick={() => setBroadcastCourseFilter(tab.key as any)}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold transition-all flex items-center gap-1.5 ${
+                          className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-mono font-bold transition-all flex items-center justify-center gap-1.5 whitespace-nowrap ${
                             broadcastCourseFilter === tab.key
                               ? 'bg-white text-slate-900 shadow-sm'
                               : 'text-slate-600 hover:text-slate-900'
@@ -711,7 +763,7 @@ export default function AdminAttendancePage() {
                               </h3>
 
                               <div className="text-xs font-mono text-slate-500 font-semibold">
-                                Scope: <span className="text-slate-800">{sess.course === 'ALL' ? 'COMMON (Both Courses)' : sess.course}</span> · Window: {sess.checkinWindowMinutes} mins
+                                Scope: <span className="text-slate-800">{sess.course === 'ALL' ? 'COMMON (Both Courses)' : sess.course}</span> · Window: {sess.checkinStatus === 'active' || !sess.checkinWindowMinutes ? 'Manual (Open until closed)' : `${sess.checkinWindowMinutes} mins`}
                               </div>
                             </div>
 
@@ -783,7 +835,7 @@ export default function AdminAttendancePage() {
                           </div>
 
                           {/* Action Buttons */}
-                          <div className="flex items-center gap-2 flex-shrink-0 self-end md:self-center">
+                          <div className="flex items-center gap-2 flex-wrap w-full md:w-auto justify-end md:self-center">
                             {sess.checkinStatus === 'active' ? (
                               <button
                                 onClick={() => handleCloseSessionEarly(sess.id)}
@@ -792,15 +844,15 @@ export default function AdminAttendancePage() {
                               >
                                 Close Window
                               </button>
-                            ) : sess.checkinStatus === 'closed' ? (
+                            ) : (
                               <button
                                 onClick={() => handleReopenSession(sess.id)}
-                                className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-mono text-xs font-bold transition-all active:scale-95 cursor-pointer"
+                                className="px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-mono text-xs font-bold transition-all active:scale-95 cursor-pointer"
                                 title="Reopen check-in window"
                               >
                                 Reopen
                               </button>
-                            ) : null}
+                            )}
 
                             <button
                               onClick={() => openSessionEditor(sess)}
@@ -926,7 +978,11 @@ export default function AdminAttendancePage() {
 
                     <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end flex-wrap">
                       {saveFeedback && (
-                        <span className="text-xs font-mono font-bold text-emerald-600 animate-fade-in mr-1">
+                        <span
+                          className={`text-xs font-mono font-bold animate-fade-in mr-1 ${
+                            saveFeedback.startsWith('Error:') ? 'text-rose-600' : 'text-emerald-600'
+                          }`}
+                        >
                           {saveFeedback}
                         </span>
                       )}
@@ -934,7 +990,7 @@ export default function AdminAttendancePage() {
                       <button
                         onClick={() => handleSaveRoster(false)}
                         disabled={isSaving}
-                        className="px-4 py-2.5 rounded-xl bg-[#0088FF] hover:bg-[#0055CC] text-white font-heading font-black text-xs uppercase tracking-wider shadow-md shadow-[#0088FF]/30 transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer touch-target"
+                        className="flex-1 sm:flex-initial justify-center px-4 py-2.5 rounded-xl bg-[#0088FF] hover:bg-[#0055CC] text-white font-heading font-black text-xs uppercase tracking-wider shadow-md shadow-[#0088FF]/30 transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer touch-target"
                         title="Save session attendance updates to database"
                       >
                         <Save className="w-3.5 h-3.5" />
@@ -944,7 +1000,7 @@ export default function AdminAttendancePage() {
                       <button
                         onClick={() => handleSaveRoster(true)}
                         disabled={isSaving}
-                        className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-heading font-black text-xs uppercase tracking-wider shadow-md shadow-slate-900/25 transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer touch-target"
+                        className="flex-1 sm:flex-initial justify-center px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-heading font-black text-xs uppercase tracking-wider shadow-md shadow-slate-900/25 transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer touch-target"
                         title="Save attendance and immediately close the check-in window"
                       >
                         <Clock className="w-3.5 h-3.5 text-amber-400" />
@@ -954,7 +1010,81 @@ export default function AdminAttendancePage() {
                   </div>
                 </div>
 
-                <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
+                {/* Mobile Card Roster View */}
+                <div className="md:hidden space-y-2.5">
+                  {filteredRoster.map((student) => {
+                    const curStatus = statusMap[student.studentId] || 'pending';
+                    return (
+                      <div
+                        key={student.studentId}
+                        className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-sm space-y-2.5"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs font-bold text-[#0088FF]">
+                                {student.studentNumber}
+                              </span>
+                              <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-bold">
+                                {student.course}
+                              </span>
+                            </div>
+                            <div className="font-heading font-bold text-sm text-slate-900 truncate mt-0.5">
+                              {student.fullName}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                          <button
+                            type="button"
+                            onClick={() => setStatusMap((prev) => ({ ...prev, [student.studentId]: 'present' }))}
+                            className={`py-2 rounded-lg font-mono text-xs font-bold transition-all ${
+                              curStatus === 'present'
+                                ? 'bg-emerald-500 text-white shadow-sm'
+                                : 'text-slate-600 hover:bg-white'
+                            }`}
+                          >
+                            Present
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setStatusMap((prev) => ({ ...prev, [student.studentId]: 'absent' }))}
+                            className={`py-2 rounded-lg font-mono text-xs font-bold transition-all ${
+                              curStatus === 'absent'
+                                ? 'bg-rose-500 text-white shadow-sm'
+                                : 'text-slate-600 hover:bg-white'
+                            }`}
+                          >
+                            Absent
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setStatusMap((prev) => ({ ...prev, [student.studentId]: 'excused' }))}
+                            className={`py-2 rounded-lg font-mono text-xs font-bold transition-all ${
+                              curStatus === 'excused'
+                                ? 'bg-amber-500 text-white shadow-sm'
+                                : 'text-slate-600 hover:bg-white'
+                            }`}
+                          >
+                            Excused
+                          </button>
+                        </div>
+
+                        <input
+                          type="text"
+                          value={excuseMap[student.studentId] || ''}
+                          onChange={(e) => setExcuseMap((prev) => ({ ...prev, [student.studentId]: e.target.value }))}
+                          placeholder={curStatus === 'excused' ? 'Excuse reason...' : 'Optional note...'}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs focus:outline-none focus:border-[#0088FF]"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop Table Roster View */}
+                <div className="hidden md:block bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                       <thead>
@@ -1023,7 +1153,7 @@ export default function AdminAttendancePage() {
                                   value={excuseMap[student.studentId] || ''}
                                   onChange={(e) => setExcuseMap((prev) => ({ ...prev, [student.studentId]: e.target.value }))}
                                   placeholder={curStatus === 'excused' ? 'Required excuse reason...' : 'Optional remark...'}
-                                  className="w-full px-3 py-1.5 rounded-lg border border-slate-200 text-xs focus:outline-none focus:border-[#0088FF]"
+                                  className="w-full min-w-[150px] px-3 py-1.5 rounded-lg border border-slate-200 text-xs focus:outline-none focus:border-[#0088FF]"
                                 />
                               </td>
                             </tr>
@@ -1166,8 +1296,8 @@ export default function AdminAttendancePage() {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <span className="px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200 font-mono text-xs font-bold text-slate-700">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200 font-mono text-[11px] sm:text-xs font-bold text-slate-700 break-all">
                       Batch 11 · Registry ID: {selectedStudent.id}
                     </span>
                   </div>
@@ -1175,11 +1305,17 @@ export default function AdminAttendancePage() {
 
                 {/* 4 Attendance Metric Cards */}
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                  <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-1 shadow-sm">
-                    <div className="text-[11px] font-mono font-bold text-slate-500 uppercase">
+                  <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-1 shadow-sm min-w-0">
+                    <div className="text-[10px] sm:text-[11px] font-mono font-bold text-slate-500 uppercase">
                       Attendance Rate
                     </div>
-                    <div className="font-heading font-black text-3xl text-slate-900 tracking-tight">
+                    <div
+                      className={`font-heading font-black text-slate-900 tracking-tight break-words ${
+                        inspectedStudentMetrics.hasData
+                          ? 'text-2xl sm:text-3xl'
+                          : 'text-base sm:text-xl leading-snug'
+                      }`}
+                    >
                       {inspectedStudentMetrics.formattedRate}
                     </div>
                     <div className="text-[10px] font-mono text-emerald-600 font-semibold">
@@ -1742,26 +1878,11 @@ export default function AdminAttendancePage() {
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <label className="block text-xs font-mono font-bold text-slate-700 uppercase">
-                  Check-In Window Duration
-                </label>
-                <div className="grid grid-cols-4 gap-2">
-                  {[15, 30, 60, 120].map((d) => (
-                    <button
-                      key={d}
-                      type="button"
-                      onClick={() => setBroadcastDuration(d)}
-                      className={`py-2 rounded-xl text-xs font-mono font-bold border transition-all ${
-                        broadcastDuration === d
-                          ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                      }`}
-                    >
-                      {d} min
-                    </button>
-                  ))}
-                </div>
+              <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-200 text-xs font-mono text-blue-900 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-[#0088FF] flex-shrink-0" />
+                <span>
+                  <span className="font-bold">Manual Window Control:</span> Check-in stays open until an admin explicitly closes it.
+                </span>
               </div>
 
               <div className="space-y-1">

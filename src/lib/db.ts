@@ -14,6 +14,7 @@ import {
   CourseScope,
 } from '@/types';
 import { isSupabaseConfigured, getSupabaseAdmin } from './supabase';
+import { isRepresentativeIndex } from './auth';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -404,27 +405,28 @@ export async function getCheckinSessionById(id: string): Promise<CheckinSession 
 export async function createCheckinSession(session: CheckinSession): Promise<CheckinSession> {
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    try {
-      await supabase.from('checkin_sessions').insert({
-        id: session.id,
-        course: session.course,
-        module_id: session.moduleId,
-        module_code: session.moduleCode,
-        module_title: session.moduleTitle,
-        session_type: session.sessionType,
-        date: session.date,
-        start_time: session.startTime,
-        end_time: session.endTime,
-        checkin_status: session.checkinStatus,
-        session_status: session.sessionStatus,
-        checkin_window_minutes: session.checkinWindowMinutes,
-        checkin_opened_at: session.checkinOpenedAt,
-        checkin_expires_at: session.checkinExpiresAt,
-        notes: session.notes,
-        created_by: session.createdBy,
-        created_at: session.createdAt,
-      });
-    } catch {}
+    const { error } = await supabase.from('checkin_sessions').insert({
+      id: session.id,
+      course: session.course,
+      module_id: session.moduleId,
+      module_code: session.moduleCode,
+      module_title: session.moduleTitle,
+      session_type: session.sessionType,
+      date: session.date,
+      start_time: session.startTime,
+      end_time: session.endTime,
+      checkin_status: session.checkinStatus,
+      session_status: session.sessionStatus,
+      checkin_window_minutes: session.checkinWindowMinutes ?? 0,
+      checkin_opened_at: session.checkinOpenedAt || null,
+      checkin_expires_at: session.checkinExpiresAt || null,
+      notes: session.notes,
+      created_by: session.createdBy,
+      created_at: session.createdAt,
+    });
+    if (error) {
+      throw new Error(`Failed to create check-in session: ${error.message}`);
+    }
   }
   await saveLocalDatabase((db) => {
     const existingIdx = (db.checkinSessions || []).findIndex(
@@ -449,20 +451,33 @@ export async function updateCheckinSessionStatus(
   checkinStatus: CheckinSession['checkinStatus'],
   sessionStatus?: CheckinSession['sessionStatus']
 ): Promise<boolean> {
+  const nowIso = new Date().toISOString();
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    try {
-      const updateData: any = { checkin_status: checkinStatus, updated_at: new Date().toISOString() };
-      if (sessionStatus) updateData.session_status = sessionStatus;
-      await supabase.from('checkin_sessions').update(updateData).eq('id', id);
-    } catch {}
+    const updateData: any = { checkin_status: checkinStatus, updated_at: nowIso };
+    if (sessionStatus) updateData.session_status = sessionStatus;
+    if (checkinStatus === 'active') {
+      // Clear any previous expiration timestamp so reopened windows stay open until closed by admin
+      updateData.checkin_expires_at = null;
+      updateData.checkin_opened_at = nowIso;
+      if (!sessionStatus) updateData.session_status = 'active';
+    }
+    const { error } = await supabase.from('checkin_sessions').update(updateData).eq('id', id);
+    if (error) {
+      throw new Error(`Failed to update check-in session: ${error.message}`);
+    }
   }
   await saveLocalDatabase((db) => {
     const sess = db.checkinSessions.find((s) => s.id === id);
     if (sess) {
       sess.checkinStatus = checkinStatus;
       if (sessionStatus) sess.sessionStatus = sessionStatus;
-      sess.updatedAt = new Date().toISOString();
+      if (checkinStatus === 'active') {
+        sess.checkinExpiresAt = undefined;
+        sess.checkinOpenedAt = nowIso;
+        if (!sessionStatus) sess.sessionStatus = 'active';
+      }
+      sess.updatedAt = nowIso;
     }
   });
   return true;
@@ -578,12 +593,6 @@ export async function submitStudentCheckin(params: {
     return { success: false, error: 'Check-in window is currently closed.' };
   }
 
-  if (session.checkinExpiresAt && new Date() > new Date(session.checkinExpiresAt)) {
-    // Window expired
-    await updateCheckinSessionStatus(session.id, 'expired');
-    return { success: false, error: 'Check-in window has expired.' };
-  }
-
   // Course validation
   if (session.course !== 'ALL' && session.course !== params.student.course) {
     return {
@@ -592,15 +601,15 @@ export async function submitStudentCheckin(params: {
     };
   }
 
-  // Check duplicate
+  // Check duplicate (only block if already marked present; allow reopened sessions to update absent/pending/excused)
   const existingRecords = await getAttendanceRecords(session.id);
-  const alreadyPresent = existingRecords.some(
+  const existingRecord = existingRecords.find(
     (r) =>
       r.studentId === params.student.id ||
       r.studentNumber.toUpperCase() === params.student.studentNumber.toUpperCase()
   );
 
-  if (alreadyPresent) {
+  if (existingRecord && existingRecord.status === 'present') {
     return {
       success: false,
       alreadyCheckedIn: true,
@@ -608,7 +617,7 @@ export async function submitStudentCheckin(params: {
     };
   }
 
-  const recordId = `rec-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const recordId = existingRecord?.id || `rec-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const checkinId = `chk-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const nowStr = new Date().toISOString();
 
@@ -638,9 +647,9 @@ export async function submitStudentCheckin(params: {
 
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    try {
-      await Promise.all([
-        supabase.from('attendance_records').insert({
+    const [recRes, chkRes] = await Promise.all([
+      supabase.from('attendance_records').upsert(
+        {
           id: record.id,
           session_id: record.sessionId,
           student_id: record.studentId,
@@ -650,8 +659,13 @@ export async function submitStudentCheckin(params: {
           status: record.status,
           submission_source: record.submissionSource,
           marked_at: record.markedAt,
-        }),
-        supabase.from('attendance_checkins').insert({
+          marked_by: null,
+          excuse_reason: null,
+        },
+        { onConflict: 'session_id,student_id' }
+      ),
+      supabase.from('attendance_checkins').upsert(
+        {
           id: checkin.id,
           session_id: checkin.sessionId,
           student_id: checkin.studentId,
@@ -661,54 +675,81 @@ export async function submitStudentCheckin(params: {
           status: checkin.status,
           timestamp: checkin.timestamp,
           device_fingerprint: checkin.deviceFingerprint,
-        }),
-      ]);
-    } catch (err: any) {
-      if (err.code === '23505') {
+        },
+        { onConflict: 'session_id,student_id' }
+      ),
+    ]);
+    if (recRes.error) {
+      if (recRes.error.code === '23505') {
         return {
           success: false,
           alreadyCheckedIn: true,
           error: `Already Recorded: ${params.student.fullName} is already marked Present.`,
         };
       }
+      throw new Error(`Failed to persist attendance record: ${recRes.error.message}`);
+    }
+    if (chkRes.error) {
+      throw new Error(`Failed to persist check-in log: ${chkRes.error.message}`);
     }
   }
 
   await saveLocalDatabase((db) => {
-    db.attendanceRecords.push(record);
-    db.attendanceCheckins.push(checkin);
+    const rIdx = db.attendanceRecords.findIndex(
+      (r) => r.sessionId === record.sessionId && r.studentId === record.studentId
+    );
+    if (rIdx >= 0) db.attendanceRecords[rIdx] = record;
+    else db.attendanceRecords.push(record);
+
+    const cIdx = db.attendanceCheckins.findIndex(
+      (c) => c.sessionId === checkin.sessionId && c.studentId === checkin.studentId
+    );
+    if (cIdx >= 0) db.attendanceCheckins[cIdx] = checkin;
+    else db.attendanceCheckins.push(checkin);
   });
 
   return { success: true, record };
 }
 
 export async function saveOrUpdateAttendanceRecord(record: AttendanceRecord): Promise<AttendanceRecord> {
+  const [saved] = await saveOrUpdateAttendanceRecordsBatch([record]);
+  return saved;
+}
+
+export async function saveOrUpdateAttendanceRecordsBatch(records: AttendanceRecord[]): Promise<AttendanceRecord[]> {
+  if (!records || records.length === 0) return [];
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    try {
-      await supabase.from('attendance_records').upsert({
-        id: record.id,
-        session_id: record.sessionId,
-        student_id: record.studentId,
-        student_number: record.studentNumber,
-        student_name: record.studentName,
-        course: record.course,
-        status: record.status,
-        submission_source: record.submissionSource,
-        marked_at: record.markedAt,
-        marked_by: record.markedBy,
-        excuse_reason: record.excuseReason,
-      });
-    } catch {}
+    const rows = records.map((record) => ({
+      id: record.id,
+      session_id: record.sessionId,
+      student_id: record.studentId,
+      student_number: record.studentNumber,
+      student_name: record.studentName,
+      course: record.course,
+      status: record.status,
+      submission_source: record.submissionSource,
+      marked_at: record.markedAt,
+      marked_by: record.markedBy || null,
+      excuse_reason: record.excuseReason || null,
+    }));
+    const { error } = await supabase
+      .from('attendance_records')
+      .upsert(rows, { onConflict: 'session_id,student_id' });
+    if (error) {
+      throw new Error(`Failed to save attendance records: ${error.message}`);
+    }
   }
   await saveLocalDatabase((db) => {
-    const idx = db.attendanceRecords.findIndex(
-      (r) => r.sessionId === record.sessionId && r.studentId === record.studentId
-    );
-    if (idx >= 0) db.attendanceRecords[idx] = record;
-    else db.attendanceRecords.push(record);
+    for (const record of records) {
+      const idx = db.attendanceRecords.findIndex(
+        (r) => r.sessionId === record.sessionId && r.studentId === record.studentId
+      );
+      if (idx >= 0) db.attendanceRecords[idx] = record;
+      else db.attendanceRecords.push(record);
+    }
   });
-  return record;
+  return records;
 }
 
 /**
@@ -749,22 +790,24 @@ export async function finalizeSessionAttendance(
 
   const supabase = getSupabaseAdmin();
   if (supabase && newAbsentRecords.length > 0) {
-    try {
-      await supabase.from('attendance_records').insert(
-        newAbsentRecords.map((r) => ({
-          id: r.id,
-          session_id: r.sessionId,
-          student_id: r.studentId,
-          student_number: r.studentNumber,
-          student_name: r.studentName,
-          course: r.course,
-          status: r.status,
-          submission_source: r.submissionSource,
-          marked_at: r.markedAt,
-          marked_by: r.markedBy,
-        }))
-      );
-    } catch {}
+    const { error } = await supabase.from('attendance_records').upsert(
+      newAbsentRecords.map((r) => ({
+        id: r.id,
+        session_id: r.sessionId,
+        student_id: r.studentId,
+        student_number: r.studentNumber,
+        student_name: r.studentName,
+        course: r.course,
+        status: r.status,
+        submission_source: r.submissionSource,
+        marked_at: r.markedAt,
+        marked_by: r.markedBy,
+      })),
+      { onConflict: 'session_id,student_id' }
+    );
+    if (error) {
+      throw new Error(`Failed to finalize attendance records: ${error.message}`);
+    }
   }
 
   await updateCheckinSessionStatus(sessionId, 'finalized', 'completed');
@@ -780,75 +823,255 @@ export async function finalizeSessionAttendance(
 // Invitations & Users
 // =============================================================================
 
+function extractTokenClearFromRow(row: any): string | undefined {
+  if (row?.token_clear) return row.token_clear;
+  if (typeof row?.id === 'string') {
+    const m = row.id.match(/^inv-\d+-(B11-[A-F0-9]{4}-[A-F0-9]{4})$/i);
+    if (m) return m[1].toUpperCase();
+  }
+  return undefined;
+}
+
+function mapSupabaseInvitation(r: any): Invitation {
+  return {
+    id: r.id,
+    studentId: r.student_id,
+    studentNumber: r.student_number,
+    course: r.course,
+    tokenHash: r.token_hash,
+    tokenClear: extractTokenClearFromRow(r),
+    isRedeemed: Boolean(r.is_redeemed),
+    redeemedBy: r.redeemed_by || undefined,
+    redeemedAt: r.redeemed_at || undefined,
+    expiresAt: r.expires_at,
+    createdAt: r.created_at,
+  };
+}
+
+function mapSupabaseUser(r: any): UserAccount {
+  const isRep = r.role === 'representative' || isRepresentativeIndex(r.student_number || '');
+  return {
+    id: r.id,
+    username: r.username,
+    role: r.role,
+    studentId: r.student_id || undefined,
+    studentNumber: r.student_number || undefined,
+    course: r.course || undefined,
+    fullName: r.full_name,
+    email: r.email || undefined,
+    passwordHash: r.password_hash,
+    isActive: r.is_active ?? true,
+    isRepresentative: isRep,
+    createdAt: r.created_at,
+  };
+}
+
 export async function getInvitations(): Promise<Invitation[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('invitations')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (!error && data) {
+        const mapped = data.map(mapSupabaseInvitation);
+        saveLocalDatabase((db) => {
+          db.invitations = mapped;
+        }).catch(() => {});
+        return mapped;
+      }
+    } catch {}
+  }
   const db = await getLocalDatabase();
   return db.invitations || [];
 }
 
 export async function createInvitation(invitation: Invitation): Promise<Invitation> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    // Clean up any older unredeemed invite for the same student so only the latest code stays active
+    await supabase
+      .from('invitations')
+      .delete()
+      .eq('student_id', invitation.studentId)
+      .eq('is_redeemed', false);
+
+    const { error } = await supabase.from('invitations').insert({
+      id: invitation.id,
+      student_id: invitation.studentId,
+      student_number: invitation.studentNumber,
+      course: invitation.course,
+      token_hash: invitation.tokenHash,
+      is_redeemed: invitation.isRedeemed,
+      expires_at: invitation.expiresAt,
+      created_at: invitation.createdAt,
+    });
+    if (error) {
+      throw new Error(`Failed to persist invitation in database: ${error.message}`);
+    }
+  }
   await saveLocalDatabase((db) => {
+    db.invitations = (db.invitations || []).filter(
+      (inv) => !(inv.studentId === invitation.studentId && !inv.isRedeemed)
+    );
     db.invitations.unshift(invitation);
   });
   return invitation;
 }
 
 export async function findInvitationByHash(tokenHash: string): Promise<Invitation | null> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('invitations')
+        .select('*')
+        .eq('token_hash', tokenHash)
+        .eq('is_redeemed', false)
+        .maybeSingle();
+      if (!error && data) {
+        return mapSupabaseInvitation(data);
+      }
+      if (!error && !data) {
+        return null;
+      }
+    } catch {}
+  }
   const db = await getLocalDatabase();
   return db.invitations.find((inv) => inv.tokenHash === tokenHash && !inv.isRedeemed) || null;
 }
 
 export async function markInvitationRedeemed(id: string, redeemedBy: string): Promise<boolean> {
+  const nowIso = new Date().toISOString();
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { error } = await supabase
+      .from('invitations')
+      .update({
+        is_redeemed: true,
+        redeemed_by: redeemedBy,
+        redeemed_at: nowIso,
+      })
+      .eq('id', id);
+    if (error) {
+      throw new Error(`Failed to mark invitation redeemed: ${error.message}`);
+    }
+  }
   await saveLocalDatabase((db) => {
     const inv = db.invitations.find((i) => i.id === id);
     if (inv) {
       inv.isRedeemed = true;
       inv.redeemedBy = redeemedBy;
-      inv.redeemedAt = new Date().toISOString();
+      inv.redeemedAt = nowIso;
     }
   });
   return true;
 }
 
-export async function getUserByUsername(username: string): Promise<UserAccount | null> {
+export async function getUsers(): Promise<UserAccount[]> {
   const db = await getLocalDatabase();
+  const localUsers = db.users || [];
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from('users').select('*');
+      if (!error && data) {
+        const supaUsers = data.map(mapSupabaseUser);
+        const seenIds = new Set(supaUsers.map((u) => u.id));
+        const seenUsernames = new Set(supaUsers.map((u) => u.username.toLowerCase()));
+        // Keep baseline local users (like built-in admin-001) that haven't been seeded into Supabase yet
+        const merged = [...supaUsers];
+        for (const lu of localUsers) {
+          if (!seenIds.has(lu.id) && !seenUsernames.has(lu.username.toLowerCase())) {
+            merged.push(lu);
+          }
+        }
+        return merged;
+      }
+    } catch {}
+  }
+  return localUsers;
+}
+
+export async function getUserByUsername(username: string): Promise<UserAccount | null> {
+  const clean = username.trim().toLowerCase();
+  const cleanUpper = username.trim().toUpperCase();
+  const users = await getUsers();
   return (
-    db.users.find(
-      (u) => u.username.toLowerCase() === username.trim().toLowerCase() && u.isActive
+    users.find(
+      (u) =>
+        u.isActive &&
+        (u.username.toLowerCase() === clean ||
+          (u.studentNumber && u.studentNumber.toUpperCase() === cleanUpper))
     ) || null
   );
 }
 
 export async function getUserById(id: string): Promise<UserAccount | null> {
-  const db = await getLocalDatabase();
-  return db.users.find((u) => u.id === id && u.isActive) || null;
+  const users = await getUsers();
+  return users.find((u) => u.id === id && u.isActive) || null;
 }
 
 export async function createUserAccount(account: UserAccount): Promise<UserAccount> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { error } = await supabase.from('users').upsert({
+      id: account.id,
+      username: account.username,
+      role: account.role,
+      student_id: account.studentId || null,
+      student_number: account.studentNumber || null,
+      course: account.course || null,
+      full_name: account.fullName,
+      email: account.email || null,
+      password_hash: account.passwordHash || '',
+      is_active: account.isActive,
+      created_at: account.createdAt,
+    });
+    if (error) {
+      throw new Error(`Failed to persist user account in database: ${error.message}`);
+    }
+  }
   await saveLocalDatabase((db) => {
-    db.users.push(account);
+    const idx = (db.users || []).findIndex((u) => u.id === account.id || u.username.toLowerCase() === account.username.toLowerCase());
+    if (idx >= 0) db.users[idx] = account;
+    else db.users.push(account);
   });
   return account;
 }
 
 export async function revokeUserAccount(studentIdOrStudentNumber: string): Promise<boolean> {
-  const clean = studentIdOrStudentNumber.trim().toUpperCase();
+  const raw = studentIdOrStudentNumber.trim();
+  const cleanUpper = raw.toUpperCase();
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    try {
-      await supabase.from('users').delete().or(`student_id.eq.${clean},student_number.eq.${clean}`);
-      await supabase.from('invitations').update({ is_redeemed: false, redeemed_by: null, redeemed_at: null }).or(`student_id.eq.${clean},student_number.eq.${clean}`);
-    } catch {}
+    const { error: userErr } = await supabase
+      .from('users')
+      .delete()
+      .or(`student_id.eq.${raw},student_number.eq.${cleanUpper},id.eq.${raw}`);
+    if (userErr) {
+      throw new Error(`Failed to revoke user account: ${userErr.message}`);
+    }
+    const { error: invErr } = await supabase
+      .from('invitations')
+      .update({ is_redeemed: false, redeemed_by: null, redeemed_at: null })
+      .or(`student_id.eq.${raw},student_number.eq.${cleanUpper}`);
+    if (invErr) {
+      throw new Error(`Failed to reset invitation: ${invErr.message}`);
+    }
   }
   await saveLocalDatabase((db) => {
     db.users = (db.users || []).filter(
       (u) =>
-        u.studentId !== studentIdOrStudentNumber &&
-        (u.studentNumber || '').toUpperCase() !== clean &&
-        u.id !== studentIdOrStudentNumber
+        u.studentId !== raw &&
+        (u.studentNumber || '').toUpperCase() !== cleanUpper &&
+        u.id !== raw
     );
     // Reset invite so student can be re-invited if needed
     (db.invitations || []).forEach((inv) => {
-      if (inv.studentId === studentIdOrStudentNumber || inv.studentNumber.toUpperCase() === clean) {
+      if (inv.studentId === raw || inv.studentNumber.toUpperCase() === cleanUpper) {
         inv.isRedeemed = false;
         inv.redeemedBy = undefined;
         inv.redeemedAt = undefined;
@@ -863,12 +1086,13 @@ export async function revokeInvitation(invitationIdOrStudentId: string): Promise
   const cleanUpper = clean.toUpperCase();
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    try {
-      await supabase
-        .from('invitations')
-        .delete()
-        .or(`id.eq.${clean},student_id.eq.${clean},student_number.eq.${cleanUpper}`);
-    } catch {}
+    const { error } = await supabase
+      .from('invitations')
+      .delete()
+      .or(`id.eq.${clean},student_id.eq.${clean},student_number.eq.${cleanUpper}`);
+    if (error) {
+      throw new Error(`Failed to revoke invitation: ${error.message}`);
+    }
   }
   await saveLocalDatabase((db) => {
     db.invitations = (db.invitations || []).filter(

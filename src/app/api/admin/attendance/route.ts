@@ -3,11 +3,13 @@ import {
   getCheckinSessionById,
   getAttendanceRecords,
   getStudents,
-  saveOrUpdateAttendanceRecord,
+  saveOrUpdateAttendanceRecordsBatch,
 } from '@/lib/db';
-import { AttendanceRecord } from '@/types';
+import { AttendanceRecord, AttendanceStatus } from '@/types';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 
 export async function GET(req: NextRequest) {
   try {
@@ -68,36 +70,64 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { sessionId, studentId, status, excuseReason, adminName } = body;
+    const { sessionId, studentId, status, excuseReason, adminName, updates } = body;
 
-    if (!sessionId || !studentId || !status) {
-      return NextResponse.json({ error: 'Missing required parameters' }, { status: 400 });
+    if (!sessionId) {
+      return NextResponse.json({ error: 'Missing required sessionId parameter' }, { status: 400 });
     }
 
-    const allStudents = await getStudents();
-    const targetStudent = allStudents.find((s) => s.id === studentId);
-    if (!targetStudent) return NextResponse.json({ error: 'Student not found' }, { status: 404 });
+    const items: Array<{ studentId: string; status: AttendanceStatus; excuseReason?: string }> = Array.isArray(updates)
+      ? updates
+      : studentId && status
+      ? [{ studentId, status, excuseReason }]
+      : [];
 
-    const existingRecords = await getAttendanceRecords(sessionId);
-    const existing = existingRecords.find((r) => r.studentId === studentId);
+    if (items.length === 0) {
+      return NextResponse.json({ error: 'Missing attendance update parameters' }, { status: 400 });
+    }
 
-    const record: AttendanceRecord = {
-      id: existing ? existing.id : `rec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      sessionId,
-      studentId: targetStudent.id,
-      studentNumber: targetStudent.studentNumber,
-      studentName: targetStudent.fullName,
-      course: targetStudent.course,
-      status,
-      submissionSource: 'admin_manual',
-      markedAt: new Date().toISOString(),
-      markedBy: adminName || 'Admin',
-      excuseReason: excuseReason || undefined,
-    };
+    const [allStudents, existingRecords] = await Promise.all([
+      getStudents(),
+      getAttendanceRecords(sessionId),
+    ]);
 
-    const saved = await saveOrUpdateAttendanceRecord(record);
-    return NextResponse.json({ success: true, record: saved });
+    const studentMap = new Map(allStudents.map((s) => [s.id, s]));
+    const existingMap = new Map(existingRecords.map((r) => [r.studentId, r]));
+    const nowIso = new Date().toISOString();
+    const recordsToSave: AttendanceRecord[] = [];
+
+    for (const item of items) {
+      const targetStudent = studentMap.get(item.studentId);
+      if (!targetStudent) {
+        return NextResponse.json({ error: `Student not found: ${item.studentId}` }, { status: 404 });
+      }
+      const existing = existingMap.get(item.studentId);
+      const trimmedReason = item.excuseReason ? String(item.excuseReason).trim() : undefined;
+
+      recordsToSave.push({
+        id: existing ? existing.id : `rec-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        sessionId,
+        studentId: targetStudent.id,
+        studentNumber: targetStudent.studentNumber,
+        studentName: targetStudent.fullName,
+        course: targetStudent.course,
+        status: item.status,
+        submissionSource: 'admin_manual',
+        markedAt: nowIso,
+        markedBy: adminName || 'Admin',
+        excuseReason: trimmedReason || undefined,
+      });
+    }
+
+    const saved = await saveOrUpdateAttendanceRecordsBatch(recordsToSave);
+    return NextResponse.json({
+      success: true,
+      record: saved.length === 1 ? saved[0] : undefined,
+      records: saved,
+      updatedCount: saved.length,
+    });
   } catch (err: any) {
+    console.error('Admin attendance POST error:', err);
     return NextResponse.json({ error: err.message || 'Failed to update record' }, { status: 500 });
   }
 }

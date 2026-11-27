@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getUserByUsername, getStudents, getLocalDatabase } from '@/lib/db';
+import { getUserByUsername } from '@/lib/db';
 import { verifyPassword, signSessionToken, isRepresentativeIndex } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
@@ -13,14 +13,7 @@ export async function POST(req: NextRequest) {
     }
 
     const cleanInput = username.trim().toUpperCase();
-    const db = await getLocalDatabase();
-
-    // Look up by username or studentNumber
-    let user = (db.users || []).find(
-      (u) =>
-        u.username.toUpperCase() === cleanInput ||
-        (u.studentNumber && u.studentNumber.toUpperCase() === cleanInput)
-    );
+    const user = await getUserByUsername(cleanInput);
 
     if (!user || !user.passwordHash) {
       return NextResponse.json({ error: 'Invalid index number or password' }, { status: 401 });

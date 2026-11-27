@@ -16,7 +16,10 @@ export const fetchCache = 'force-no-store';
 export async function GET() {
   try {
     const sessions = await getCheckinSessions();
-    return NextResponse.json({ success: true, sessions });
+    return NextResponse.json(
+      { success: true, sessions },
+      { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' } }
+    );
   } catch (err: any) {
     return NextResponse.json({ error: 'Failed to fetch sessions' }, { status: 500 });
   }
@@ -25,15 +28,13 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { course, moduleId, moduleCode, moduleTitle, sessionType, date, startTime, endTime, durationMinutes, notes } = body;
+    const { course, moduleId, moduleCode, moduleTitle, sessionType, date, startTime, endTime, notes } = body;
 
     if (!moduleId || !moduleTitle || !date || !startTime || !endTime) {
       return NextResponse.json({ error: 'Missing required session parameters' }, { status: 400 });
     }
 
-    const windowMin = Number(durationMinutes) || 30;
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + windowMin * 60 * 1000);
 
     // Duplicate Check: Prevent creating duplicate broadcast cards for same module, date, and cohort
     const allSessions = await getCheckinSessions();
@@ -69,9 +70,8 @@ export async function POST(req: NextRequest) {
       endTime,
       checkinStatus: 'active',
       sessionStatus: 'active',
-      checkinWindowMinutes: windowMin,
+      checkinWindowMinutes: 0, // Manual control: stays open until closed by admin
       checkinOpenedAt: now.toISOString(),
-      checkinExpiresAt: expiresAt.toISOString(),
       notes: notes || '',
       createdBy: 'Administrator',
       createdAt: now.toISOString(),
@@ -94,8 +94,15 @@ export async function PUT(req: NextRequest) {
     const session = await getCheckinSessionById(sessionId);
     if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
 
-    await updateCheckinSessionStatus(sessionId, status || 'closed');
-    return NextResponse.json({ success: true, message: `Session updated to ${status || 'closed'}` });
+    const targetStatus = status || 'closed';
+    const nextSessionStatus = targetStatus === 'active' ? 'active' : undefined;
+    await updateCheckinSessionStatus(sessionId, targetStatus, nextSessionStatus);
+    const updatedSession = await getCheckinSessionById(sessionId);
+    return NextResponse.json({
+      success: true,
+      session: updatedSession,
+      message: `Session updated to ${targetStatus}`,
+    });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || 'Failed to update session' }, { status: 500 });
   }
