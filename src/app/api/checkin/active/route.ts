@@ -77,6 +77,43 @@ export async function GET(req: NextRequest) {
       if (r.studentNumber) checkedInNumbersSet.add(r.studentNumber.toUpperCase());
     });
 
+    // Check if this device already has a valid check-in receipt cookie for an active session
+    let deviceReceipt: {
+      sessionId: string;
+      fullName: string;
+      studentNumber: string;
+      moduleTitle: string;
+      timestamp: string;
+      alreadyCheckedIn: boolean;
+    } | null = null;
+
+    for (const sess of validActiveSessions) {
+      const cookieVal = req.cookies.get(`tv_checkin_${sess.id}`)?.value;
+      if (cookieVal && checkedInNumbersSet.has(cookieVal.toUpperCase())) {
+        const stu = minimalStudents.find(
+          (s) => s.studentNumber.toUpperCase() === cookieVal.toUpperCase()
+        );
+        const rec = sessionRecords.find(
+          (r) =>
+            r.sessionId === sess.id &&
+            r.studentNumber.toUpperCase() === cookieVal.toUpperCase()
+        );
+        if (stu) {
+          deviceReceipt = {
+            sessionId: sess.id,
+            fullName: stu.fullName,
+            studentNumber: stu.studentNumber,
+            moduleTitle: sess.moduleTitle,
+            timestamp: rec?.markedAt
+              ? new Date(rec.markedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : 'Recorded',
+            alreadyCheckedIn: true,
+          };
+          break;
+        }
+      }
+    }
+
     return NextResponse.json(
       {
         success: true,
@@ -85,6 +122,7 @@ export async function GET(req: NextRequest) {
         activeSessions: validActiveSessions,
         students: minimalStudents,
         checkedInStudentNumbers: Array.from(checkedInNumbersSet),
+        deviceReceipt,
       },
       { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' } }
     );

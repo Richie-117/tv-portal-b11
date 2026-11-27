@@ -633,6 +633,10 @@ export async function submitStudentCheckin(params: {
     markedAt: nowStr,
   };
 
+  const safeFingerprint = params.deviceFingerprint
+    ? String(params.deviceFingerprint).slice(0, 64)
+    : 'mobile-browser';
+
   const checkin: AttendanceCheckin = {
     id: checkinId,
     sessionId: session.id,
@@ -642,43 +646,27 @@ export async function submitStudentCheckin(params: {
     course: params.student.course,
     status: 'confirmed',
     timestamp: nowStr,
-    deviceFingerprint: params.deviceFingerprint,
+    deviceFingerprint: safeFingerprint,
   };
 
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    const [recRes, chkRes] = await Promise.all([
-      supabase.from('attendance_records').upsert(
-        {
-          id: record.id,
-          session_id: record.sessionId,
-          student_id: record.studentId,
-          student_number: record.studentNumber,
-          student_name: record.studentName,
-          course: record.course,
-          status: record.status,
-          submission_source: record.submissionSource,
-          marked_at: record.markedAt,
-          marked_by: null,
-          excuse_reason: null,
-        },
-        { onConflict: 'session_id,student_id' }
-      ),
-      supabase.from('attendance_checkins').upsert(
-        {
-          id: checkin.id,
-          session_id: checkin.sessionId,
-          student_id: checkin.studentId,
-          student_number: checkin.studentNumber,
-          student_name: checkin.studentName,
-          course: checkin.course,
-          status: checkin.status,
-          timestamp: checkin.timestamp,
-          device_fingerprint: checkin.deviceFingerprint,
-        },
-        { onConflict: 'session_id,student_id' }
-      ),
-    ]);
+    const recRes = await supabase.from('attendance_records').upsert(
+      {
+        id: record.id,
+        session_id: record.sessionId,
+        student_id: record.studentId,
+        student_number: record.studentNumber,
+        student_name: record.studentName,
+        course: record.course,
+        status: record.status,
+        submission_source: record.submissionSource,
+        marked_at: record.markedAt,
+        marked_by: null,
+        excuse_reason: null,
+      },
+      { onConflict: 'session_id,student_id' }
+    );
     if (recRes.error) {
       if (recRes.error.code === '23505') {
         return {
@@ -689,8 +677,23 @@ export async function submitStudentCheckin(params: {
       }
       throw new Error(`Failed to persist attendance record: ${recRes.error.message}`);
     }
+
+    const chkRes = await supabase.from('attendance_checkins').upsert(
+      {
+        id: checkin.id,
+        session_id: checkin.sessionId,
+        student_id: checkin.studentId,
+        student_number: checkin.studentNumber,
+        student_name: checkin.studentName,
+        course: checkin.course,
+        status: checkin.status,
+        timestamp: checkin.timestamp,
+        device_fingerprint: checkin.deviceFingerprint,
+      },
+      { onConflict: 'session_id,student_id' }
+    );
     if (chkRes.error) {
-      throw new Error(`Failed to persist check-in log: ${chkRes.error.message}`);
+      console.error('Non-fatal check-in log write warning:', chkRes.error.message);
     }
   }
 

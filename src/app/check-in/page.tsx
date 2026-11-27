@@ -74,19 +74,34 @@ export default function CheckInPage() {
           setActiveSession(main);
           setActiveSessions(activeList);
 
-          // Device lock recovery from localStorage
+          // Device lock recovery from localStorage or server receipt cookie
+          const serverCheckedInSet = new Set<string>(
+            (data.checkedInStudentNumbers || []).map((n: string) => n.toUpperCase())
+          );
           let foundReceipt = false;
           try {
             const savedReceipt = localStorage.getItem(`tv_checkin_${main.id}`);
             if (savedReceipt) {
               const parsed = JSON.parse(savedReceipt);
-              if (parsed && parsed.studentNumber) {
+              if (parsed && parsed.studentNumber && serverCheckedInSet.has(parsed.studentNumber.toUpperCase())) {
                 setSuccessResult(parsed);
                 foundReceipt = true;
+              } else {
+                localStorage.removeItem(`tv_checkin_${main.id}`);
               }
             }
           } catch {}
-          if (isNewSession && !foundReceipt) {
+          if (!foundReceipt && data.deviceReceipt && data.deviceReceipt.studentNumber) {
+            setSuccessResult(data.deviceReceipt);
+            foundReceipt = true;
+            try {
+              localStorage.setItem(
+                `tv_checkin_${data.deviceReceipt.sessionId || main.id}`,
+                JSON.stringify(data.deviceReceipt)
+              );
+            } catch {}
+          }
+          if (!foundReceipt && (isNewSession || successResult)) {
             setSuccessResult(null);
           }
 

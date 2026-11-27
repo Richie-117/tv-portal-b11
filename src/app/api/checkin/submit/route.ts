@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
     const result = await submitStudentCheckin({
       sessionId: session.id,
       student: targetStudent,
-      deviceFingerprint: req.headers.get('user-agent') || 'mobile-browser',
+      deviceFingerprint: (req.headers.get('user-agent') || 'mobile-browser').slice(0, 64),
     });
 
     if (!result.success) {
